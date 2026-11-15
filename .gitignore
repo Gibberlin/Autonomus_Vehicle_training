@@ -1,0 +1,30 @@
+# CARLA simulator distribution; users can install/download CARLA separately.
+/CarlaUE4/
+/Engine/
+/Co-Simulation/
+/HDMaps/
+/PythonAPI/
+/CarlaUE4.exe
+/GlobalShaderCache-*.bin
+
+# Local Python environment and caches.
+/carla-env/
+/.venv/
+/venv/
+__pycache__/
+*.py[cod]
+
+# Local datasets and captured frames.
+/dataset/
+/drive_data/
+/frames/
+/clip_frames/
+
+# Downloaded/generated model weights and run outputs.
+*.pt
+*.pth
+*.onnx
+*.onnx.data
+/detections_*.mp4
+/crop_check.png
+/baseline_*.csv
