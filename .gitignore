@@ -11,6 +11,8 @@
 /carla-env/
 /.venv/
 /venv/
+/.cache/
+/.vscode/
 __pycache__/
 *.py[cod]
 

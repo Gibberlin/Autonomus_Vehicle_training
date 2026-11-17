@@ -39,6 +39,10 @@ def parse_args():
     parser.add_argument("--yolo-half", action="store_true")
     parser.add_argument("--no-yolo", action="store_true", help="disable object detection")
     parser.add_argument("--plan-only", action="store_true", help="plan and report the fixed route without driving")
+    parser.add_argument("--steer-bias", type=float, default=0.0,
+                        help="manual steering bias offset trim to subtract from model output")
+    parser.add_argument("--symmetric", action=argparse.BooleanOptionalAction, default=True,
+                        help="enable anti-bias symmetric inference 0.5 * (f(x) - f(flip(x))) (default: enabled)")
     return parser.parse_args()
 
 
@@ -347,7 +351,15 @@ def main():
                 torch.from_numpy(model_input).unsqueeze(0).to(device).float() / 255.0
             )
             with torch.no_grad():
-                model_steer_raw = float(model(model_tensor).item())
+                if args.symmetric:
+                    flipped_tensor = torch.flip(model_tensor, dims=[-1])
+                    batch_in = torch.cat([model_tensor, flipped_tensor], dim=0)
+                    preds = model(batch_in)
+                    model_steer_raw = float((0.5 * (preds[0] - preds[1])).item())
+                else:
+                    model_steer_raw = float(model(model_tensor).item())
+                if args.steer_bias != 0.0:
+                    model_steer_raw -= args.steer_bias
             if device == "cuda":
                 torch.cuda.synchronize()
             model_steer = float(

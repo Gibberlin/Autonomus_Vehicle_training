@@ -121,6 +121,10 @@ def parse_args():
                         help="optional path to custom checkpoints JSON file")
     parser.add_argument("--refresh-map-cache", action="store_true",
                         help="force re-extracting map road topology from live CARLA world")
+    parser.add_argument("--steer-bias", type=float, default=0.0,
+                        help="manual steering bias offset trim to subtract from model output")
+    parser.add_argument("--symmetric", action=argparse.BooleanOptionalAction, default=True,
+                        help="enable anti-bias symmetric inference 0.5 * (f(x) - f(flip(x))) (default: enabled)")
     return parser.parse_args()
 
 
@@ -423,7 +427,15 @@ def main():
             steer_tensor = torch.from_numpy(steer_input).unsqueeze(0).to(device).float() / 255.0
             steer_start = time.perf_counter()
             with torch.no_grad():
-                steer_raw = float(model(steer_tensor).item())
+                if args.symmetric:
+                    flipped_tensor = torch.flip(steer_tensor, dims=[-1])
+                    batch_in = torch.cat([steer_tensor, flipped_tensor], dim=0)
+                    preds = model(batch_in)
+                    steer_raw = float((0.5 * (preds[0] - preds[1])).item())
+                else:
+                    steer_raw = float(model(steer_tensor).item())
+                if args.steer_bias != 0.0:
+                    steer_raw -= args.steer_bias
             if device == "cuda":
                 torch.cuda.synchronize()
             steer_ms = (time.perf_counter() - steer_start) * 1000
