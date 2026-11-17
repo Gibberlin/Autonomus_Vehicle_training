@@ -110,6 +110,17 @@ def parse_args():
     parser.add_argument("--start-model", dest="start_autopilot", action="store_false",
                         help="start with PilotNet instead of CARLA autopilot")
     parser.set_defaults(start_autopilot=True)
+    parser.add_argument("--minimap", action="store_true", help="enable Town03 road minimap overlay")
+    parser.add_argument("--minimap-position", choices=("top-right", "top-left"), default="top-right",
+                        help="minimap overlay position on display (default: top-right)")
+    parser.add_argument("--minimap-size", type=int, default=260,
+                        help="minimap pixel dimensions (width and height, default: 260)")
+    parser.add_argument("--minimap-opacity", type=float, default=0.85,
+                        help="minimap overlay opacity between 0.0 and 1.0 (default: 0.85)")
+    parser.add_argument("--checkpoints-config", default=None,
+                        help="optional path to custom checkpoints JSON file")
+    parser.add_argument("--refresh-map-cache", action="store_true",
+                        help="force re-extracting map road topology from live CARLA world")
     return parser.parse_args()
 
 
@@ -295,6 +306,32 @@ def main():
             "collisions", "lane_invasions", "distance_m",
         ])
 
+        minimap = None
+        if args.minimap:
+            try:
+                from visualization.minimap import Minimap
+                from navigation.checkpoints import load_or_generate_checkpoints
+
+                cp_config = args.checkpoints_config or os.path.join("config", "checkpoints_town03.json")
+                checkpoints = load_or_generate_checkpoints(world.get_map(), cp_config)
+                carla_map_arg = world.get_map() if args.refresh_map_cache else None
+                minimap = Minimap(
+                    size=args.minimap_size,
+                    position=args.minimap_position,
+                    opacity=args.minimap_opacity,
+                    carla_map=carla_map_arg,
+                    checkpoints=checkpoints,
+                    checkpoints_path=cp_config,
+                )
+                print(
+                    f"[minimap] Enabled ({args.minimap_position}, size={args.minimap_size}px, "
+                    f"opacity={args.minimap_opacity}, {len(checkpoints)} checkpoints)"
+                )
+            except Exception as exc:
+                print(f"[minimap] Warning: Could not initialize minimap: {exc}")
+                traceback.print_exc()
+                minimap = None
+
         print("[ready] CARLA live demo")
         print("[keys] m: PilotNet | a: autopilot | q / Esc: quit")
         while True:
@@ -423,6 +460,14 @@ def main():
                 (255, 255, 255),
                 1,
             )
+            if minimap is not None:
+                ego_tf = ego.get_transform()
+                display = minimap.overlay_on_frame(
+                    display,
+                    vehicle_x=ego_tf.location.x,
+                    vehicle_y=ego_tf.location.y,
+                    vehicle_yaw=ego_tf.rotation.yaw,
+                )
             if writer is not None:
                 writer.write(display)
             if not args.no_display:
