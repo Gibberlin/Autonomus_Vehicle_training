@@ -422,7 +422,9 @@ def main():
                 telemetry.flush()
 
             display = frame.copy()
-            draw_distance_guide(display, cv2)
+            draw_distance_guide(
+                display, cv2, None if lead is None else lead[0]
+            )
             if yolo_boxes is not None and yolo_classes is not None:
                 class_names = {
                     0: "person", 1: "bicycle", 2: "car",

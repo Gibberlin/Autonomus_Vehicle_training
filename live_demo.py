@@ -149,43 +149,47 @@ def find_lead(boxes, classes, width, height):
     return lead
 
 
-def draw_distance_guide(frame, cv2):
+def draw_distance_guide(frame, cv2, lead_distance=None):
     height, width = frame.shape[:2]
     center_x, horizon_y = width / 2.0, height / 2.0
     focal = width / (2.0 * np.tan(np.radians(CAMERA_FOV / 2.0)))
 
-    def project(distance, lateral):
+    def ground(distance, lateral):
         x = center_x + focal * lateral / distance
         y = horizon_y + focal * CAMERA_HEIGHT_M / distance
         return int(round(x)), int(round(y))
 
-    near, far = 5.0, 30.0
+    def lead_color(distance):
+        if distance < 8:
+            return (0, 0, 255)
+        if distance < 15:
+            return (0, 255, 255)
+        return (0, 255, 0)
+
+    far = min(max(3.0, lead_distance), 30.0) if lead_distance is not None else 30.0
+    shade_color = lead_color(lead_distance) if lead_distance is not None else (255, 200, 0)
     polygon = np.array([
-        project(near, -LANE_HALF_WIDTH_M),
-        project(far, -LANE_HALF_WIDTH_M),
-        project(far, LANE_HALF_WIDTH_M),
-        project(near, LANE_HALF_WIDTH_M),
+        ground(3.0, -LANE_HALF_WIDTH_M),
+        ground(3.0, LANE_HALF_WIDTH_M),
+        ground(far, LANE_HALF_WIDTH_M),
+        ground(far, -LANE_HALF_WIDTH_M),
     ], dtype=np.int32)
     overlay = frame.copy()
-    cv2.fillPoly(overlay, [polygon], (190, 125, 35))
-    cv2.addWeighted(overlay, 0.24, frame, 0.76, 0.0, frame)
-    cv2.polylines(frame, [polygon], True, (255, 220, 100), 2)
+    cv2.fillPoly(overlay, [polygon], shade_color)
+    cv2.addWeighted(overlay, 0.25, frame, 0.75, 0.0, frame)
 
     for distance in (5, 10, 20, 30):
-        left = project(distance, -LANE_HALF_WIDTH_M)
-        right = project(distance, LANE_HALF_WIDTH_M)
-        cv2.line(frame, left, right, (255, 255, 225), 2)
-        label_x = max(4, left[0] - 48)
-        label_y = min(height - 6, max(18, left[1] - 5))
+        left = ground(distance, -LANE_HALF_WIDTH_M)
+        right = ground(distance, LANE_HALF_WIDTH_M)
+        cv2.line(frame, left, right, (255, 255, 255), 1)
         cv2.putText(
             frame,
             f"{distance}m",
-            (label_x, label_y),
+            (left[0] - 38, left[1] + 5),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
+            0.45,
             (255, 255, 255),
-            2,
-            cv2.LINE_AA,
+            1,
         )
     return frame
 
@@ -444,7 +448,9 @@ def main():
                 telemetry.flush()
 
             display = frame.copy()
-            draw_distance_guide(display, cv2)
+            draw_distance_guide(
+                display, cv2, None if lead is None else lead[0]
+            )
             for box, class_id in zip(yolo_boxes, yolo_classes):
                 x1, y1, x2, y2 = map(int, box)
                 cv2.rectangle(display, (x1, y1), (x2, y2), (0, 220, 0), 1)
