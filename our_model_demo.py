@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-CAMERA_WIDTH, CAMERA_HEIGHT = 320, 240
+CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
 CAMERA_FOV = 90.0
 CAMERA_HEIGHT_M = 2.0
 ROUTE_TOWN = "Town03"
@@ -205,7 +205,7 @@ def main():
         try:
             from pilotnet import PilotNet, preprocess
             from agents.navigation.basic_agent import BasicAgent
-            from live_demo import YoloWorker, find_lead
+            from live_demo import YoloWorker, draw_distance_guide, find_lead
         except ImportError as exc:
             raise RuntimeError(
                 "pilotnet.py, live_demo.py, and CARLA's navigation dependencies must be available"
@@ -317,7 +317,7 @@ def main():
             "collisions", "lane_invasions",
         ])
 
-        print("[ready] Fixed 5 km PilotNet point-to-point route")
+        print("[ready] Our Model demo: fixed 5 km PilotNet point-to-point route")
         print("[keys] m: PilotNet steering | r: route-controller baseline | q / Esc: quit")
         print("[mode] PilotNet steering active")
         print("[control] PilotNet supplies all steering; the route controller supplies speed and hazard braking")
@@ -341,7 +341,8 @@ def main():
                 if latest is not None:
                     yolo_frame_number, yolo_ms, yolo_boxes, yolo_classes = latest
 
-            model_input = preprocess(frame)
+            model_frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
+            model_input = preprocess(model_frame)
             model_tensor = (
                 torch.from_numpy(model_input).unsqueeze(0).to(device).float() / 255.0
             )
@@ -421,6 +422,7 @@ def main():
                 telemetry.flush()
 
             display = frame.copy()
+            draw_distance_guide(display, cv2)
             if yolo_boxes is not None and yolo_classes is not None:
                 class_names = {
                     0: "person", 1: "bicycle", 2: "car",
@@ -471,7 +473,7 @@ def main():
                     raise RuntimeError(f"Could not open video output: {args.video}")
             if writer is not None:
                 writer.write(display)
-            cv2.imshow("CARLA fixed-route PilotNet test", display)
+            cv2.imshow("Our Model demo", display)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q")):

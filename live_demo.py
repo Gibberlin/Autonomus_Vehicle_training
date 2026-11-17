@@ -12,7 +12,7 @@ from datetime import datetime
 import numpy as np
 
 
-CAMERA_WIDTH, CAMERA_HEIGHT = 320, 240
+CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
 CAMERA_FOV = 90.0
 CAMERA_HEIGHT_M = 2.0
 LANE_HALF_WIDTH_M = 1.8
@@ -147,6 +147,47 @@ def find_lead(boxes, classes, width, height):
         if abs(lateral) < LANE_HALF_WIDTH_M and (lead is None or distance < lead[0]):
             lead = (distance, x1, y2, x2)
     return lead
+
+
+def draw_distance_guide(frame, cv2):
+    height, width = frame.shape[:2]
+    center_x, horizon_y = width / 2.0, height / 2.0
+    focal = width / (2.0 * np.tan(np.radians(CAMERA_FOV / 2.0)))
+
+    def project(distance, lateral):
+        x = center_x + focal * lateral / distance
+        y = horizon_y + focal * CAMERA_HEIGHT_M / distance
+        return int(round(x)), int(round(y))
+
+    near, far = 5.0, 30.0
+    polygon = np.array([
+        project(near, -LANE_HALF_WIDTH_M),
+        project(far, -LANE_HALF_WIDTH_M),
+        project(far, LANE_HALF_WIDTH_M),
+        project(near, LANE_HALF_WIDTH_M),
+    ], dtype=np.int32)
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [polygon], (190, 125, 35))
+    cv2.addWeighted(overlay, 0.24, frame, 0.76, 0.0, frame)
+    cv2.polylines(frame, [polygon], True, (255, 220, 100), 2)
+
+    for distance in (5, 10, 20, 30):
+        left = project(distance, -LANE_HALF_WIDTH_M)
+        right = project(distance, LANE_HALF_WIDTH_M)
+        cv2.line(frame, left, right, (255, 255, 225), 2)
+        label_x = max(4, left[0] - 48)
+        label_y = min(height - 6, max(18, left[1] - 5))
+        cv2.putText(
+            frame,
+            f"{distance}m",
+            (label_x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    return frame
 
 
 def main():
@@ -336,7 +377,8 @@ def main():
                     model_distance_run += step_distance
             previous_location = location
 
-            steer_input = preprocess(frame)
+            model_frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
+            steer_input = preprocess(model_frame)
             steer_tensor = torch.from_numpy(steer_input).unsqueeze(0).to(device).float() / 255.0
             steer_start = time.perf_counter()
             with torch.no_grad():
@@ -402,6 +444,7 @@ def main():
                 telemetry.flush()
 
             display = frame.copy()
+            draw_distance_guide(display, cv2)
             for box, class_id in zip(yolo_boxes, yolo_classes):
                 x1, y1, x2, y2 = map(int, box)
                 cv2.rectangle(display, (x1, y1), (x2, y2), (0, 220, 0), 1)
