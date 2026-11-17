@@ -23,6 +23,7 @@ __pycache__/
 /clip_frames/
 
 # Downloaded/generated model weights and run outputs.
+/results/
 *.pt
 *.pth
 *.onnx
