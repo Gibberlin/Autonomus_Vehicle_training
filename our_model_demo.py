@@ -3,26 +3,28 @@ import csv
 import os
 import queue
 import random
-import sys
 import threading
-import time
 import traceback
 from datetime import datetime
-from pathlib import Path
 
+from navigation.fixed_route import (
+    MODEL_STEER_WEIGHT,
+    ROUTE_CHECKPOINT_IDS,
+    ROUTE_RESOLUTION_M,
+    ROUTE_START_SPAWN_INDEX,
+    ROUTE_TOWN,
+    blend_model_and_navigation_steering,
+    build_fixed_route,
+)
 
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
 CAMERA_FOV = 90.0
 CAMERA_HEIGHT_M = 2.0
-ROUTE_TOWN = "Town03"
-ROUTE_START_SPAWN_INDEX = 0
-ROUTE_DISTANCE_M = 5_000.0
-ROUTE_RESOLUTION_M = 2.0
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Drive a fixed 5 km Town03 route using PilotNet steering"
+        description="Drive a fixed Town03 checkpoint route using PilotNet and navigation"
     )
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=2000)
@@ -38,75 +40,13 @@ def parse_args():
     parser.add_argument("--yolo-device", default=None, help="Ultralytics device, e.g. cpu or 0")
     parser.add_argument("--yolo-half", action="store_true")
     parser.add_argument("--no-yolo", action="store_true", help="disable object detection")
-    parser.add_argument("--plan-only", action="store_true", help="plan and report the fixed route without driving")
+    parser.add_argument("--plan-only", action="store_true",
+                        help="plan and report the fixed route without driving")
     parser.add_argument("--steer-bias", type=float, default=0.0,
                         help="manual steering bias offset trim to subtract from model output")
     parser.add_argument("--symmetric", action=argparse.BooleanOptionalAction, default=True,
                         help="enable anti-bias symmetric inference 0.5 * (f(x) - f(flip(x))) (default: enabled)")
     return parser.parse_args()
-
-
-def build_fixed_route(world_map):
-    api_path = Path(__file__).resolve().parent / "PythonAPI" / "carla"
-    if not api_path.is_dir():
-        raise RuntimeError(f"CARLA navigation API not found: {api_path}")
-    if str(api_path) not in sys.path:
-        sys.path.insert(0, str(api_path))
-
-    import networkx as nx
-    from agents.navigation.global_route_planner import GlobalRoutePlanner
-
-    spawn_points = world_map.get_spawn_points()
-    if ROUTE_START_SPAWN_INDEX >= len(spawn_points):
-        raise RuntimeError(
-            f"{ROUTE_TOWN} has {len(spawn_points)} spawn points; "
-            f"fixed start index {ROUTE_START_SPAWN_INDEX} is invalid"
-        )
-
-    planner = GlobalRoutePlanner(world_map, ROUTE_RESOLUTION_M)
-    remaining = set(range(len(spawn_points)))
-    remaining.remove(ROUTE_START_SPAWN_INDEX)
-    current_location = spawn_points[ROUTE_START_SPAWN_INDEX].location
-    route = []
-    route_distance = 0.0
-    previous_location = None
-
-    while remaining and route_distance < ROUTE_DISTANCE_M:
-        destination_index = max(
-            remaining,
-            key=lambda index: (
-                current_location.distance(spawn_points[index].location),
-                -index,
-            ),
-        )
-        destination = spawn_points[destination_index].location
-        try:
-            segment = planner.trace_route(current_location, destination)
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            remaining.remove(destination_index)
-            continue
-
-        for waypoint, road_option in segment:
-            location = waypoint.transform.location
-            if previous_location is not None:
-                step_distance = previous_location.distance(location)
-                if step_distance < 0.05:
-                    continue
-                if route_distance + step_distance > ROUTE_DISTANCE_M:
-                    return route, route_distance, planner, spawn_points
-                route_distance += step_distance
-            route.append((waypoint, road_option))
-            previous_location = location
-
-        current_location = destination
-        remaining.remove(destination_index)
-
-    if route_distance < ROUTE_DISTANCE_M - ROUTE_RESOLUTION_M:
-        raise RuntimeError(
-            f"Could only plan {route_distance:.1f} m on {ROUTE_TOWN}; "
-            f"the fixed route requires {ROUTE_DISTANCE_M:.0f} m"
-        )
-    return route, route_distance, planner, spawn_points
 
 
 def enqueue_latest(frame_queue, image):
@@ -173,7 +113,7 @@ def main():
     stats_lock = threading.Lock()
     previous_location = None
     model_steer_previous = 0.0
-    mode = {"name": "model"}
+    mode = {"name": "model+navigation"}
     yolo_frame_number = -1
     yolo_ms = 0.0
     yolo_boxes = None
@@ -190,12 +130,11 @@ def main():
 
         route, planned_distance, global_planner, spawn_points = build_fixed_route(world.get_map())
         if not route:
-            raise RuntimeError("The fixed route planner returned an empty route")
+            raise RuntimeError("The fixed checkpoint route planner returned an empty route")
         print(
-            f"[route] {ROUTE_TOWN}, start spawn {ROUTE_START_SPAWN_INDEX}, "
-            f"{planned_distance / 1000:.3f} km, {len(route)} waypoints, "
-            f"destination=({route[-1][0].transform.location.x:.1f}, "
-            f"{route[-1][0].transform.location.y:.1f})"
+            f"[route] {ROUTE_TOWN}, spawn {ROUTE_START_SPAWN_INDEX} -> "
+            f"{' -> '.join(ROUTE_CHECKPOINT_IDS)}, {planned_distance:.0f} m, "
+            f"{len(route)} waypoints"
         )
         if args.plan_only:
             return 0
@@ -321,11 +260,14 @@ def main():
             "collisions", "lane_invasions",
         ])
 
-        print("[ready] Our Model demo: fixed 5 km PilotNet point-to-point route")
-        print("[keys] m: PilotNet steering | r: route-controller baseline | q / Esc: quit")
-        print("[mode] PilotNet steering active")
-        print("[control] PilotNet supplies all steering; the route controller supplies speed and hazard braking")
-        print("[note] PilotNet sees the camera, not the destination; this test may not reach the finish")
+        print("[ready] PilotNet + navigation demo: fixed Town03 checkpoint route")
+        print("[keys] m: PilotNet + navigation | r: navigation baseline | q / Esc: quit")
+        print("[mode] PilotNet + navigation steering active")
+        print(
+            f"[control] Navigation supplies {1.0 - MODEL_STEER_WEIGHT:.0%} of steering "
+            f"plus route speed and hazard braking; PilotNet supplies "
+            f"{MODEL_STEER_WEIGHT:.0%} of steering"
+        )
         if yolo is None:
             print("[yolo] disabled")
         else:
@@ -369,8 +311,10 @@ def main():
             route_control = agent.run_step()
 
             route_steer = float(route_control.steer)
-            if mode["name"] == "model":
-                command_steer = model_steer
+            if mode["name"] == "model+navigation":
+                command_steer = blend_model_and_navigation_steering(
+                    model_steer, route_steer
+                )
             else:
                 command_steer = route_steer
 
@@ -494,13 +438,13 @@ def main():
                 break
             if key == ord("r") and mode["name"] != "route":
                 mode["name"] = "route"
-                print("[mode] Route-controller steering active")
-            elif key == ord("m") and mode["name"] != "model":
-                mode["name"] = "model"
-                print("[mode] PilotNet steering active; route completion is not guaranteed")
+                print("[mode] Navigation steering active")
+            elif key == ord("m") and mode["name"] != "model+navigation":
+                mode["name"] = "model+navigation"
+                print("[mode] PilotNet + navigation steering active")
 
             if agent.done():
-                print("[finish] Fixed 5 km route reached")
+                print("[finish] Fixed checkpoint route reached")
                 break
             if args.max_seconds and sim_time >= args.max_seconds:
                 print("[exit] Reached --max-seconds")

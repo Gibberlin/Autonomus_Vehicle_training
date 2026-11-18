@@ -11,6 +11,16 @@ from datetime import datetime
 
 import numpy as np
 
+from navigation.fixed_route import (
+    MODEL_STEER_WEIGHT,
+    ROUTE_CHECKPOINT_IDS,
+    ROUTE_RESOLUTION_M,
+    ROUTE_START_SPAWN_INDEX,
+    ROUTE_TOWN,
+    blend_model_and_navigation_steering,
+    build_fixed_route,
+)
+
 
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
 CAMERA_FOV = 90.0
@@ -110,6 +120,11 @@ def parse_args():
     parser.add_argument("--start-model", dest="start_autopilot", action="store_false",
                         help="start with PilotNet instead of CARLA autopilot")
     parser.set_defaults(start_autopilot=True)
+    parser.add_argument(
+        "--navigation",
+        action="store_true",
+        help="use the fixed Town03 spawn/checkpoint route with navigation-assisted model steering",
+    )
     parser.add_argument("--minimap", action="store_true", help="enable Town03 road minimap overlay")
     parser.add_argument("--minimap-position", choices=("top-right", "top-left"), default="top-right",
                         help="minimap overlay position on display (default: top-right)")
@@ -259,6 +274,9 @@ def main():
     sensors, actors = [], []
     camera_queue = queue.Queue(maxsize=1)
     writer = telemetry = None
+    navigation_agent = navigation_route = route_planner = None
+    planned_route_distance = route_progress_m = 0.0
+    navigation_steer = None
     status, error_text = "ok", ""
     sim_time_run = model_time_run = distance = model_distance_run = 0.0
     frames_run = yolo_runs_run = 0
@@ -277,7 +295,23 @@ def main():
     try:
         client = carla.Client(args.host, args.port)
         client.set_timeout(30.0)
-        world = client.load_world(args.town) if args.town else client.get_world()
+        if args.navigation:
+            if args.town and args.town.replace("\\", "/").rstrip("/").split("/")[-1].casefold() != "town03":
+                raise ValueError("--navigation only supports Town03")
+            world = client.get_world()
+            if not world.get_map().name.casefold().endswith("town03"):
+                world = client.load_world(ROUTE_TOWN)
+            navigation_route, planned_route_distance, route_planner, spawn_points = (
+                build_fixed_route(world.get_map(), args.checkpoints_config)
+            )
+            print(
+                f"[route] {ROUTE_TOWN}, spawn {ROUTE_START_SPAWN_INDEX} -> "
+                f"{' -> '.join(ROUTE_CHECKPOINT_IDS)}, "
+                f"{planned_route_distance:.0f} m, {len(navigation_route)} waypoints"
+            )
+        else:
+            world = client.load_world(args.town) if args.town else client.get_world()
+            spawn_points = world.get_map().get_spawn_points()
         original_settings = world.get_settings()
         settings = world.get_settings()
         settings.synchronous_mode = True
@@ -287,23 +321,51 @@ def main():
         tm = client.get_trafficmanager(args.tm_port)
         tm.set_synchronous_mode(True)
         blueprints = world.get_blueprint_library()
-        spawn_points = world.get_map().get_spawn_points()
         if not spawn_points:
             raise RuntimeError("The current CARLA map has no vehicle spawn points")
-        random.shuffle(spawn_points)
+        if args.navigation:
+            ego_spawn = spawn_points[ROUTE_START_SPAWN_INDEX]
+            traffic_spawn_points = [
+                spawn for index, spawn in enumerate(spawn_points)
+                if index != ROUTE_START_SPAWN_INDEX
+            ]
+            random.Random(2026).shuffle(traffic_spawn_points)
+        else:
+            random.shuffle(spawn_points)
+            ego_spawn = spawn_points.pop()
+            traffic_spawn_points = spawn_points
 
         ego_bp = blueprints.find("vehicle.tesla.model3")
-        ego = world.try_spawn_actor(ego_bp, spawn_points.pop())
+        ego = world.try_spawn_actor(ego_bp, ego_spawn)
         if ego is None:
+            if args.navigation:
+                raise RuntimeError(
+                    f"Could not spawn at fixed Town03 spawn point "
+                    f"{ROUTE_START_SPAWN_INDEX}; ensure it is not occupied"
+                )
             raise RuntimeError("Could not spawn the ego vehicle at the selected spawn point")
         actors.append(ego)
         ego.set_autopilot(state["auto"], tm.get_port())
+
+        if args.navigation:
+            from agents.navigation.basic_agent import BasicAgent
+
+            navigation_agent = BasicAgent(
+                ego,
+                target_speed=args.target_speed,
+                opt_dict={"sampling_resolution": ROUTE_RESOLUTION_M},
+                map_inst=world.get_map(),
+                grp_inst=route_planner,
+            )
+            navigation_agent.set_global_plan(
+                navigation_route, stop_waypoint_creation=True
+            )
 
         vehicle_bps = [
             blueprint for blueprint in blueprints.filter("vehicle.*")
             if int(blueprint.get_attribute("number_of_wheels")) == 4
         ]
-        for spawn in spawn_points[:args.vehicles]:
+        for spawn in traffic_spawn_points[:args.vehicles]:
             npc = world.try_spawn_actor(random.choice(vehicle_bps), spawn)
             if npc is not None:
                 npc.set_autopilot(True, tm.get_port())
@@ -350,7 +412,8 @@ def main():
         telemetry_writer.writerow([
             "sim_time_s", "world_frame", "camera_frame", "sensor_lag_frames",
             "mode", "speed_kmh", "autopilot_steer", "steer_raw",
-            "steer_command", "throttle", "brake", "steer_ms", "yolo_ms",
+            "navigation_steer", "steer_command", "throttle", "brake",
+            "route_progress_m", "steer_ms", "yolo_ms",
             "yolo_age_frames", "pipeline_ms", "detections", "lead_distance_m",
             "collisions", "lane_invasions", "distance_m",
         ])
@@ -382,7 +445,13 @@ def main():
                 minimap = None
 
         print("[ready] CARLA live demo")
-        print("[keys] m: PilotNet | a: autopilot | q / Esc: quit")
+        if args.navigation:
+            print(
+                f"[control] Navigation steering weight: "
+                f"{1.0 - MODEL_STEER_WEIGHT:.0%}; PilotNet weight: "
+                f"{MODEL_STEER_WEIGHT:.0%}"
+            )
+        print("[keys] m: PilotNet (+ nav when enabled) | a: autopilot | q / Esc: quit")
         while True:
             world_frame = world.tick()
             image = camera_queue.get(timeout=10.0)
@@ -442,15 +511,38 @@ def main():
             steer_command = float(np.clip(0.75 * steer_previous + 0.25 * steer_raw, -1.0, 1.0))
             steer_previous = steer_command
 
+            navigation_control = None
+            if navigation_agent is not None and not state["auto"]:
+                navigation_control = navigation_agent.run_step()
+                navigation_steer = float(navigation_control.steer)
+                remaining_waypoints = len(
+                    navigation_agent.get_local_planner().get_plan()
+                )
+                route_progress_m = planned_route_distance * (
+                    1.0 - remaining_waypoints / max(len(navigation_route), 1)
+                )
+                route_progress_m = max(
+                    0.0, min(planned_route_distance, route_progress_m)
+                )
+            else:
+                navigation_steer = None
+
             if state["auto"]:
                 control = ego.get_control()
                 steer_autopilot = float(control.steer)
                 throttle, brake = float(control.throttle), float(control.brake)
             else:
                 steer_autopilot = None
-                speed_error = args.target_speed - speed
-                throttle = float(np.clip(speed_error * 0.04, 0.0, 0.5))
-                brake = float(np.clip(-speed_error * 0.04, 0.0, 1.0))
+                if navigation_control is not None:
+                    steer_command = blend_model_and_navigation_steering(
+                        steer_command, navigation_steer
+                    )
+                    throttle = float(navigation_control.throttle)
+                    brake = float(navigation_control.brake)
+                else:
+                    speed_error = args.target_speed - speed
+                    throttle = float(np.clip(speed_error * 0.04, 0.0, 0.5))
+                    brake = float(np.clip(-speed_error * 0.04, 0.0, 1.0))
                 ego.apply_control(carla.VehicleControl(
                     throttle=throttle,
                     steer=steer_command,
@@ -470,7 +562,11 @@ def main():
             with stats_lock:
                 collision_count = stats["collisions"]
                 invasion_count = stats["invasions"]
-            mode_name = "autopilot" if state["auto"] else "model"
+            mode_name = (
+                "autopilot"
+                if state["auto"]
+                else "model+navigation" if navigation_agent is not None else "model"
+            )
             telemetry_writer.writerow([
                 round(sim_time_run, 2),
                 int(world_frame),
@@ -480,9 +576,11 @@ def main():
                 round(speed, 3),
                 "" if steer_autopilot is None else round(steer_autopilot, 4),
                 round(steer_raw, 4),
+                "" if navigation_steer is None else round(navigation_steer, 4),
                 round(steer_command, 4),
                 round(throttle, 4),
                 round(brake, 4),
+                round(route_progress_m, 2),
                 round(steer_ms, 2),
                 round(yolo_ms, 2),
                 int(yolo_age_frames),
@@ -521,6 +619,17 @@ def main():
                 (255, 255, 255),
                 1,
             )
+            if navigation_agent is not None:
+                cv2.putText(
+                    display,
+                    f"Route {route_progress_m:.0f}/{planned_route_distance:.0f} m "
+                    f"| nav {navigation_steer if navigation_steer is not None else 0.0:+.2f}",
+                    (8, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (0, 255, 255),
+                    1,
+                )
             if minimap is not None:
                 ego_tf = ego.get_transform()
                 display = minimap.overlay_on_frame(
@@ -548,6 +657,9 @@ def main():
                 ego.set_autopilot(True, tm.get_port())
                 state["auto"] = True
                 print("[mode] CARLA autopilot now has control")
+            if navigation_agent is not None and not state["auto"] and navigation_agent.done():
+                print("[finish] Fixed checkpoint route reached")
+                break
 
     except KeyboardInterrupt:
         status = "interrupted"
@@ -613,6 +725,8 @@ def main():
             "mean_yolo_ms": round(yolo_sum_run / max(yolo_runs_run, 1), 2),
             "frames": frames_run,
             "yolo_runs": yolo_runs_run,
+            "planned_route_m": round(planned_route_distance, 2),
+            "route_progress_m": round(route_progress_m, 2),
             "csv": csv_path,
             "video": args.video or None,
             "params": vars(args),
