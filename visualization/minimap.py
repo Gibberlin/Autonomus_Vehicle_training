@@ -1,8 +1,7 @@
-"""Town03 2D Live Minimap with Checkpoints and Vehicle Tracking.
+"""CARLA 2D Live Minimap with route markers and vehicle tracking.
 
-Renders a top-down, clean 2D representation of the CARLA Town03 road network,
-overlays 10 fixed checkpoints (P1 to P10), and tracks the ego vehicle in real time
-with directional heading on top of OpenCV camera frames.
+Renders a top-down CARLA road network, Start and Destination markers, and the ego
+vehicle on OpenCV camera frames.
 """
 
 from __future__ import annotations
@@ -10,7 +9,8 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Any, List, Optional, Tuple
 
 try:
     import cv2
@@ -19,25 +19,97 @@ except ImportError:
     cv2 = None
     np = None
 
-from navigation.checkpoints import (
-    DEFAULT_CONFIG_PATH,
-    Checkpoint,
-    load_checkpoints,
-)
-
 DEFAULT_ROAD_CACHE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "config",
     "town03_roads_cache.json",
 )
+ROAD_CACHE_DIRECTORY = os.path.dirname(DEFAULT_ROAD_CACHE_PATH)
+MAP_INTERIOR_FRACTION = 0.1
+
+
+def map_cache_key(map_name: str) -> str:
+    """Return a filesystem-safe key for a CARLA map path or map name."""
+    basename = map_name.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    key = re.sub(r"[^A-Za-z0-9_-]+", "_", basename).strip("_").lower()
+    if not key:
+        raise ValueError(f"Invalid CARLA map name: {map_name!r}")
+    return key
+
+
+def road_cache_path_for_map(map_name: str) -> str:
+    """Return the road-cache path for one CARLA map."""
+    key = map_cache_key(map_name)
+    if key == "town03":
+        return DEFAULT_ROAD_CACHE_PATH
+    return os.path.join(ROAD_CACHE_DIRECTORY, f"{key}_roads_cache.json")
+
+
+def select_start_destination(
+    roads: List[List[Tuple[float, float]]],
+    bounds: Tuple[float, float, float, float],
+    preferred_start: Optional[Tuple[float, float]] = None,
+) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    """Choose distinct road points inside the map bounds, favoring a supplied start."""
+    min_x, max_x, min_y, max_y = bounds
+    span_x = max_x - min_x
+    span_y = max_y - min_y
+    margin_x = max(2.0, span_x * MAP_INTERIOR_FRACTION)
+    margin_y = max(2.0, span_y * MAP_INTERIOR_FRACTION)
+
+    road_points = list(dict.fromkeys(
+        point for segment in roads for point in segment
+    ))
+    candidates = [
+        point for point in road_points
+        if min_x + margin_x <= point[0] <= max_x - margin_x
+        and min_y + margin_y <= point[1] <= max_y - margin_y
+    ]
+    if len(candidates) < 2:
+        raise RuntimeError(
+            "The road cache needs at least two distinct road points away from "
+            "the map border to place Start and Destination"
+        )
+
+    if preferred_start is None:
+        center = ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
+        start = min(
+            candidates,
+            key=lambda point: (point[0] - center[0]) ** 2
+            + (point[1] - center[1]) ** 2,
+        )
+    else:
+        start = min(
+            candidates,
+            key=lambda point: (point[0] - preferred_start[0]) ** 2
+            + (point[1] - preferred_start[1]) ** 2,
+        )
+
+    destination = max(
+        (point for point in candidates if point != start),
+        key=lambda point: (point[0] - start[0]) ** 2
+        + (point[1] - start[1]) ** 2,
+    )
+    min_separation = max(5.0, min(span_x, span_y) * 0.1)
+    distance_sq = (
+        (destination[0] - start[0]) ** 2
+        + (destination[1] - start[1]) ** 2
+    )
+    if distance_sq < min_separation ** 2:
+        raise RuntimeError(
+            "The map does not have two sufficiently separated interior road points"
+        )
+    return start, destination
+
 
 # Color definitions in BGR format (for OpenCV)
 COLOR_BACKGROUND = (30, 30, 30)       # Dark charcoal
 COLOR_PANEL_BORDER = (80, 80, 80)     # Subtle border
 COLOR_ROAD = (175, 175, 175)          # Light grey
 COLOR_ROAD_OUTLINE = (100, 100, 100)  # Medium grey road casing
-COLOR_CHECKPOINT = (0, 130, 245)      # Red-orange (P1-P10)
-COLOR_CHECKPOINT_BORDER = (20, 20, 20)# Dark contrast outline
+COLOR_START = (255, 100, 0)           # Blue
+COLOR_DESTINATION = (0, 130, 245)     # Red-orange
+COLOR_MARKER_BORDER = (20, 20, 20)
 COLOR_VEHICLE = (0, 235, 0)           # Bright green
 COLOR_VEHICLE_BORDER = (0, 60, 0)     # Dark green outline
 COLOR_TEXT = (255, 255, 255)          # White
@@ -45,7 +117,7 @@ COLOR_LEGEND_BG = (20, 20, 20)        # Legend banner
 
 
 class Minimap:
-    """Town03 Top-Down 2D Minimap Renderer and Overlay."""
+    """Top-down CARLA minimap with Start and Destination road markers."""
 
     def __init__(
         self,
@@ -53,10 +125,10 @@ class Minimap:
         position: str = "top-right",
         opacity: float = 0.85,
         carla_map: Optional[Any] = None,
-        checkpoints: Optional[List[Checkpoint]] = None,
-        checkpoints_path: str = DEFAULT_CONFIG_PATH,
-        road_cache_path: str = DEFAULT_ROAD_CACHE_PATH,
+        road_cache_path: Optional[str] = None,
         padding: int = 14,
+        map_name: Optional[str] = None,
+        preferred_start: Optional[Tuple[float, float]] = None,
     ):
         """Initializes the Minimap.
 
@@ -65,10 +137,10 @@ class Minimap:
             position: Position on the camera frame ('top-right' or 'top-left').
             opacity: Transparency blend weight (0.0 to 1.0).
             carla_map: Optional live CARLA map instance (for extracting road network).
-            checkpoints: Optional list of Checkpoint objects.
-            checkpoints_path: Path to load checkpoints JSON if not provided.
-            road_cache_path: Path to cached Town03 road polylines.
+            road_cache_path: Path to cached road polylines.
             padding: Inner margin in pixels between roads and minimap border.
+            map_name: CARLA map name used to select the correct road cache.
+            preferred_start: Optional start hint, snapped to an interior road point.
         """
         self.size = max(80, int(size))
         self.position = position.lower()
@@ -76,17 +148,12 @@ class Minimap:
             self.position = "top-right"
         self.opacity = max(0.0, min(1.0, float(opacity)))
         self.padding = padding
-        self.road_cache_path = road_cache_path
+        source_map_name = map_name or getattr(carla_map, "name", None) or "Town03"
+        self.map_name = source_map_name.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        self.map_key = map_cache_key(self.map_name)
+        self.road_cache_path = road_cache_path or road_cache_path_for_map(self.map_name)
 
-        # 1. Load or extract checkpoints
-        if checkpoints is not None:
-            self.checkpoints = checkpoints
-        elif os.path.isfile(checkpoints_path):
-            self.checkpoints = load_checkpoints(checkpoints_path)
-        else:
-            self.checkpoints = []
-
-        # 2. Load or extract road polylines
+        # 1. Load or extract road polylines
         self.roads: List[List[Tuple[float, float]]] = []
         self.min_x: float = -260.0
         self.max_x: float = 260.0
@@ -94,25 +161,34 @@ class Minimap:
         self.max_y: float = 260.0
 
         if carla_map is not None:
-            try:
-                self._extract_from_carla_map(carla_map)
-            except Exception as exc:
-                print(f"[minimap] Warning: Could not extract from CARLA map ({exc}); falling back to cache")
-                self._load_from_cache_or_default()
+            self._extract_from_carla_map(carla_map)
         else:
             self._load_from_cache_or_default()
 
-        # 3. Compute coordinate transformation parameters
+        self.start_location, self.destination_location = select_start_destination(
+            self.roads,
+            (self.min_x, self.max_x, self.min_y, self.max_y),
+            preferred_start=preferred_start,
+        )
+
+        # 2. Compute coordinate transformation parameters
         self._compute_transform_parameters()
 
-        # 4. Render and cache static base image (background, roads, checkpoints, legend)
+        # 3. Render the static base image (background, roads, markers, and legend)
         self.base_image: Optional[np.ndarray] = None
         if np is not None and cv2 is not None:
             self._render_static_base()
 
     def _extract_from_carla_map(self, carla_map: Any, step_m: float = 2.0) -> None:
-        """Extracts road polylines directly from CARLA map waypoints and caches them."""
+        """Extract road polylines from the selected CARLA map and cache them."""
         import carla
+
+        source_map_name = getattr(carla_map, "name", None)
+        if source_map_name and map_cache_key(source_map_name) != self.map_key:
+            raise ValueError(
+                f"Minimap is configured for {self.map_name}, but received "
+                f"CARLA map {source_map_name}"
+            )
 
         waypoints = carla_map.generate_waypoints(step_m)
         roads: List[List[Tuple[float, float]]] = []
@@ -140,12 +216,12 @@ class Minimap:
         self._save_cache()
 
     def _save_cache(self) -> None:
-        """Saves current road segments and bounds to cache file."""
+        """Save the selected map's road segments and bounds."""
         if not self.roads:
             return
         os.makedirs(os.path.dirname(os.path.abspath(self.road_cache_path)), exist_ok=True)
         data = {
-            "map": "Town03",
+            "map": self.map_name,
             "bounds": {
                 "min_x": round(self.min_x, 1),
                 "max_x": round(self.max_x, 1),
@@ -159,30 +235,39 @@ class Minimap:
             json.dump(data, f)
 
     def _load_from_cache_or_default(self) -> None:
-        """Loads road lines from the JSON cache file if available, or uses default bounds."""
-        if os.path.isfile(self.road_cache_path):
-            try:
-                with open(self.road_cache_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                raw_roads = data.get("roads", [])
-                self.roads = [[(pt[0], pt[1]) for pt in seg] for seg in raw_roads]
-                bounds = data.get("bounds", {})
-                self.min_x = float(bounds.get("min_x", -250.0))
-                self.max_x = float(bounds.get("max_x", 250.0))
-                self.min_y = float(bounds.get("min_y", -250.0))
-                self.max_y = float(bounds.get("max_y", 250.0))
-                return
-            except Exception as exc:
-                print(f"[minimap] Warning: Could not read road cache ({exc})")
+        """Load and validate the cache for the selected CARLA map."""
+        if not os.path.isfile(self.road_cache_path):
+            raise FileNotFoundError(
+                f"No road cache for {self.map_name} at {self.road_cache_path}; "
+                "generate one from the live CARLA map first"
+            )
+        with open(self.road_cache_path, "r", encoding="utf-8") as cache_file:
+            data = json.load(cache_file)
 
-        # Fallback bounds from checkpoints if no cache exists
-        if self.checkpoints:
-            xs = [cp.x for cp in self.checkpoints]
-            ys = [cp.y for cp in self.checkpoints]
-            self.min_x = min(xs) - 40.0
-            self.max_x = max(xs) + 40.0
-            self.min_y = min(ys) - 40.0
-            self.max_y = max(ys) + 40.0
+        cache_map_name = data.get("map")
+        if not cache_map_name or map_cache_key(str(cache_map_name)) != self.map_key:
+            raise ValueError(
+                f"Road cache {self.road_cache_path} is for {cache_map_name!r}, "
+                f"not {self.map_name}"
+            )
+
+        raw_roads = data.get("roads")
+        if not isinstance(raw_roads, list) or not raw_roads:
+            raise ValueError(f"Road cache for {self.map_name} contains no roads")
+        self.roads = [
+            [(float(point[0]), float(point[1])) for point in segment]
+            for segment in raw_roads
+        ]
+        if any(len(segment) < 2 for segment in self.roads):
+            raise ValueError(f"Road cache for {self.map_name} contains invalid segments")
+
+        bounds = data.get("bounds", {})
+        self.min_x = float(bounds["min_x"])
+        self.max_x = float(bounds["max_x"])
+        self.min_y = float(bounds["min_y"])
+        self.max_y = float(bounds["max_y"])
+        if self.min_x >= self.max_x or self.min_y >= self.max_y:
+            raise ValueError(f"Road cache for {self.map_name} has invalid bounds")
 
     def _compute_transform_parameters(self) -> None:
         """Computes isotropic scaling and centering offsets for world-to-pixel mapping.
@@ -242,7 +327,7 @@ class Minimap:
         return dx_pixel, dy_pixel
 
     def _render_static_base(self) -> None:
-        """Pre-renders the static minimap background, road network, checkpoints, and legend.
+        """Pre-render the road network, Start/Destination markers, and legend.
 
         Executed only ONCE during initialization to ensure maximum runtime performance.
         """
@@ -261,33 +346,32 @@ class Minimap:
             # Road core
             cv2.polylines(base, [pts_array], isClosed=False, color=COLOR_ROAD, thickness=2, lineType=cv2.LINE_AA)
 
-        # 2. Draw Checkpoints (P1 to P10)
+        # 2. Draw Start and Destination on sampled road points
         marker_radius = max(3, int(round(self.size * 0.016)))
         font_scale = max(0.28, self.size * 0.0012)
         font_thick = 1
 
-        for cp in self.checkpoints:
-            px, py = self.world_to_pixel(cp.x, cp.y)
-
-            # Circular marker with dark outer border
-            cv2.circle(base, (px, py), marker_radius + 1, COLOR_CHECKPOINT_BORDER, -1, lineType=cv2.LINE_AA)
-            cv2.circle(base, (px, py), marker_radius, COLOR_CHECKPOINT, -1, lineType=cv2.LINE_AA)
-
-            # Text label (e.g. "P1")
-            label = cp.id
+        for location, label, color in (
+            (self.start_location, "Start", COLOR_START),
+            (self.destination_location, "Destination", COLOR_DESTINATION),
+        ):
+            px, py = self.world_to_pixel(*location)
+            cv2.circle(
+                base, (px, py), marker_radius + 1, COLOR_MARKER_BORDER, -1,
+                lineType=cv2.LINE_AA,
+            )
+            cv2.circle(
+                base, (px, py), marker_radius, color, -1, lineType=cv2.LINE_AA
+            )
             (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thick)
 
-            # Position text offset so it does not cover the marker and stays inside canvas
             text_x = px + marker_radius + 2
             text_y = py + text_h // 2
             if text_x + text_w > self.size - 4:
                 text_x = px - marker_radius - text_w - 2
-            if text_y - text_h < 4:
-                text_y = py + marker_radius + text_h + 2
-            if text_y > self.size - 18:
-                text_y = self.size - 18
+            text_x = max(4, text_x)
+            text_y = max(text_h + 4, min(self.size - text_h - 18, text_y))
 
-            # Small shadow for label readability
             cv2.putText(
                 base,
                 label,
@@ -309,40 +393,30 @@ class Minimap:
                 lineType=cv2.LINE_AA,
             )
 
-        # 3. Draw Legend at the bottom of the minimap panel
-        legend_h = max(14, int(self.size * 0.065))
+        # 3. Draw the legend at the bottom of the minimap panel
+        legend_h = max(18, int(self.size * 0.08))
         legend_y1 = self.size - legend_h
         cv2.rectangle(base, (0, legend_y1), (self.size, self.size), COLOR_LEGEND_BG, -1)
         cv2.line(base, (0, legend_y1), (self.size, legend_y1), COLOR_PANEL_BORDER, 1)
 
-        leg_font_scale = max(0.24, self.size * 0.0010)
-        # Ego legend indicator (green triangle dot)
-        ego_x, ego_y = int(self.size * 0.06), self.size - legend_h // 2
-        cv2.circle(base, (ego_x, ego_y), 3, COLOR_VEHICLE, -1, lineType=cv2.LINE_AA)
-        cv2.putText(
-            base,
-            "Ego",
-            (ego_x + 6, ego_y + 3),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            leg_font_scale,
-            COLOR_TEXT,
-            1,
-            lineType=cv2.LINE_AA,
-        )
-
-        # Checkpoints legend indicator (orange dot)
-        cp_x = int(self.size * 0.45)
-        cv2.circle(base, (cp_x, ego_y), 3, COLOR_CHECKPOINT, -1, lineType=cv2.LINE_AA)
-        cv2.putText(
-            base,
-            "P1-P10",
-            (cp_x + 6, ego_y + 3),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            leg_font_scale,
-            COLOR_TEXT,
-            1,
-            lineType=cv2.LINE_AA,
-        )
+        leg_font_scale = max(0.22, self.size * 0.0009)
+        legend_y = self.size - legend_h // 2
+        for x, label, color in (
+            (int(self.size * 0.04), "Start", COLOR_START),
+            (int(self.size * 0.38), "Destination", COLOR_DESTINATION),
+            (int(self.size * 0.82), "Ego", COLOR_VEHICLE),
+        ):
+            cv2.circle(base, (x, legend_y), 3, color, -1, lineType=cv2.LINE_AA)
+            cv2.putText(
+                base,
+                label,
+                (x + 5, legend_y + 3),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                leg_font_scale,
+                COLOR_TEXT,
+                1,
+                lineType=cv2.LINE_AA,
+            )
 
         # Panel border
         cv2.rectangle(base, (0, 0), (self.size - 1, self.size - 1), COLOR_PANEL_BORDER, 1)

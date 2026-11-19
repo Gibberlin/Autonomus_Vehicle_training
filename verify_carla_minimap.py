@@ -156,11 +156,9 @@ def run_integration_test():
         position="top-right",
         opacity=0.85,
         carla_map=carla_map,
-        checkpoints=checkpoints,
-        checkpoints_path=args.config,
     )
     init_ms = (time.perf_counter() - t_init) * 1000
-    print(f"  [OK] Minimap initialized in {init_ms:.1f} ms (roads + checkpoints pre-rendered)")
+    print(f"  [OK] Minimap initialized in {init_ms:.1f} ms (roads + route markers pre-rendered)")
 
     # Benchmark per-frame render
     n_frames = 100

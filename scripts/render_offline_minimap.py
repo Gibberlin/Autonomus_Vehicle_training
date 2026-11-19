@@ -1,8 +1,7 @@
 """Pure Python Offline Minimap Renderer (No CARLA or OpenCV required).
 
-Renders a 2D top-down view of Town03 with all 10 checkpoints (P1-P10)
-and the ego vehicle, and saves it as a 24-bit standard BMP file in results/
-for immediate visual inspection on development laptops without GPU/CARLA.
+Renders Town03's road network with Start and Destination markers and an ego
+vehicle, then saves a standard BMP preview without requiring CARLA or OpenCV.
 """
 
 import math
@@ -14,7 +13,6 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from navigation.checkpoints import load_checkpoints, DEFAULT_CONFIG_PATH
 from visualization.minimap import Minimap, DEFAULT_ROAD_CACHE_PATH
 
 
@@ -68,10 +66,8 @@ def render_offline_preview(
     size: int = 400,
 ):
     print(f"[render] Generating offline Town03 minimap preview ({size}x{size})...")
-    checkpoints = load_checkpoints(DEFAULT_CONFIG_PATH)
     minimap = Minimap(
         size=size,
-        checkpoints=checkpoints,
         road_cache_path=DEFAULT_ROAD_CACHE_PATH,
         padding=24,
     )
@@ -80,7 +76,8 @@ def render_offline_preview(
     # BGR format: (B, G, R)
     bg_color = (30, 30, 30)
     road_color = (175, 175, 175)
-    cp_color = (0, 130, 245)      # Red-orange
+    start_color = (255, 100, 0)
+    destination_color = (0, 130, 245)
     ego_color = (0, 235, 0)       # Green
     white = (255, 255, 255)
 
@@ -127,15 +124,18 @@ def render_offline_preview(
             px1, py1 = minimap.world_to_pixel(segment[i + 1][0], segment[i + 1][1])
             draw_line(px0, py0, px1, py1, road_color, thickness=2)
 
-    # 2. Draw Checkpoints P1 to P10
-    for cp in checkpoints:
-        px, py = minimap.world_to_pixel(cp.x, cp.y)
-        # Dark outline then orange dot
+    # 2. Draw Start and Destination road points
+    for location, color in (
+        (minimap.start_location, start_color),
+        (minimap.destination_location, destination_color),
+    ):
+        px, py = minimap.world_to_pixel(*location)
         draw_circle(px, py, 5, (15, 15, 15), fill=True)
-        draw_circle(px, py, 4, cp_color, fill=True)
+        draw_circle(px, py, 4, color, fill=True)
 
-    # 3. Draw Ego Vehicle at roundabout near P1, heading North (yaw = 90)
-    ego_x, ego_y, ego_yaw = 142.1, 195.4, 90.0
+    # 3. Draw the ego vehicle at Start, heading North (yaw = 90)
+    ego_x, ego_y = minimap.start_location
+    ego_yaw = 90.0
     ev_px, ev_py = minimap.world_to_pixel(ego_x, ego_y)
     dx, dy = minimap.yaw_to_direction(ego_yaw)
     nx, ny = -dy, dx

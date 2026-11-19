@@ -2,8 +2,8 @@
 
 This project trains and tests a camera-based PilotNet steering model in the CARLA
 simulator. It includes a live driving demo, optional YOLO object detection and a
-Town03 minimap, plus a fixed checkpoint route that combines PilotNet steering
-with CARLA's navigation controller.
+map-specific minimap, plus a fixed Town03 checkpoint route that combines
+PilotNet steering with CARLA's navigation controller.
 
 ---
 
@@ -18,8 +18,9 @@ The project provides:
   steering at 75% and PilotNet at 25%.
 - **Optional YOLO detection**, lead-vehicle distance visualization, collision
   and lane-invasion counters, CSV telemetry, and video recording.
-- **Optional Town03 minimap** with the road network, checkpoint markers, and a
-  live ego-vehicle heading indicator.
+- **Optional map-specific minimap** with the active map's road network and a
+  live ego-vehicle heading indicator, plus only two static markers: Start and
+  Destination. The markers are selected from interior road samples.
 - **Dataset capture and training** scripts for collecting steering data and
   training the PilotNet model.
 
@@ -50,8 +51,8 @@ repository root. For the bundled Windows simulator:
 
 ### Run a demo
 
-The standard live demo starts in CARLA autopilot mode. Enable the Town03 minimap
-and run for two minutes:
+The standard live demo starts in CARLA autopilot mode. Enable the minimap for the
+selected map and run for two minutes:
 
 ```powershell
 python live_demo.py --town Town03 --minimap --max-seconds 120
@@ -104,7 +105,7 @@ Autonomus_Vehicle_training/
 │
 ├── config/
 │   ├── checkpoints_town03.json    # 10 fixed checkpoints (P1-P10) coordinates, roads, GPS
-│   └── town03_roads_cache.json     # Pre-rendered vector road network cache for offline & fast load
+│   └── *_roads_cache.json          # Map-specific vector road caches
 │
 ├── navigation/
 │   ├── __init__.py                 # Navigation module exports
@@ -117,11 +118,13 @@ Autonomus_Vehicle_training/
 │
 ├── scripts/
 │   ├── create_map_cache.py         # Utility to generate Town03 vector road cache
+│   ├── generate_minimap_caches.py  # Generate caches and previews for CARLA's available maps
 │   └── render_offline_minimap.py   # Pure Python standalone minimap preview generator
 │
 ├── tests/
-│   ├── test_minimap_offline.py     # 17 offline unit tests runnable without CARLA/GPU
-│   └── test_model_navigation.py    # Route assembly and PilotNet/navigation blend tests
+│   ├── test_minimap_offline.py       # 17 offline tests runnable without CARLA/GPU
+│   ├── test_minimap_map_selection.py # Map cache selection and validation tests
+│   └── test_model_navigation.py      # Route assembly and steering blend tests
 │
 ├── generate_checkpoints.py         # Standalone CLI tool to generate/verify checkpoints
 ├── verify_carla_minimap.py         # CARLA integration & diagnostic test suite for the simulator machine
@@ -219,8 +222,42 @@ The generator will:
 ### Basic Execution with Minimap
 
 ```bash
-# Run live demo with Town03 minimap enabled
+# Run live demo with the minimap for Town03
 python live_demo.py --town Town03 --minimap
+```
+
+The minimap shows a Start marker snapped to an interior road sample near the
+vehicle's spawn point and a well-separated Destination marker on the road
+network. Markers are kept away from the minimap's outer bounds.
+
+To load the tagged Guwahati OpenDRIVE map and generate its minimap preview:
+
+```powershell
+python LocalMap\load_guwahati.py
+```
+
+The script writes `results/minimap_previews/guwahati.png` and a map-specific
+road cache. Its Start and Destination are selected from CARLA driving
+waypoints, not from arbitrary image coordinates.
+
+The demo selects the road cache using the active CARLA map name. If that map's
+cache is missing, it builds and saves the cache from the live CARLA map. Caches
+are stored in `config/` (`town03_roads_cache.json` for Town03 and
+`<map>_roads_cache.json` for other maps). To pre-generate caches and 800px PNG
+previews for every drivable map reported by CARLA:
+
+```powershell
+python scripts\generate_minimap_caches.py
+```
+
+The generator skips existing caches; pass `--force` to refresh them. When it
+builds caches, it cycles the CARLA server through the required maps and restores
+the map that was active when it started. PNG previews are written to
+`results/minimap_previews/`; the `results/` directory is ignored by Git. To
+generate only selected maps, pass their names with `--maps`, for example:
+
+```powershell
+python scripts\generate_minimap_caches.py --maps Town01 Town03 Town05_Opt
 ```
 
 ### Configurable Minimap Options
@@ -232,8 +269,8 @@ python live_demo.py --town Town03 --minimap --minimap-position top-right --minim
 # Top-left corner:
 python live_demo.py --town Town03 --minimap --minimap-position top-left --minimap-size 260 --minimap-opacity 0.85
 
-# Custom checkpoints file:
-python live_demo.py --town Town03 --minimap --checkpoints-config config/checkpoints_town03.json
+# Use a custom Town03 route checkpoint file (navigation mode):
+python live_demo.py --navigation --minimap --checkpoints-config config/checkpoints_town03.json
 
 # Force refresh of road topology cache from live CARLA world:
 python live_demo.py --town Town03 --minimap --refresh-map-cache
@@ -293,21 +330,25 @@ python -m unittest discover -s tests
 The 17 minimap tests verify:
 - Checkpoint configuration integrity and uniqueness.
 - World-to-pixel coordinate projection.
+- Start and Destination selection from interior road points.
 - Inverted vertical axis handling (North maps to top of image).
 - Vehicle heading angle (yaw) to 2D pixel direction vectors.
 - Aspect-ratio preservation (circular roundabouts remain circular).
 - Road cache data validity and non-overlapping spatial distribution.
 - Overlay positioning and adaptive resizing.
 
-Four additional model-navigation tests cover route segment chaining, empty
-route handling, steering blending, and navigation-option parsing.
+Four map-selection tests cover normalized names and paths, preferred-start
+snapping, interior road-marker placement, and rejecting a cache for the wrong map.
+Four model-navigation tests cover route segment chaining, empty route handling,
+steering blending, and navigation-option parsing.
 
 ### Generate Standalone Offline Minimap Preview
 
 ```bash
 python scripts/render_offline_minimap.py
 ```
-Outputs `results/offline_minimap_preview.bmp` which can be opened in any image viewer to inspect the road layout, checkpoints P1–P10, and vehicle heading.
+Outputs `results/offline_minimap_preview.bmp`, showing the road layout, the two
+road-snapped route markers, and the vehicle heading.
 
 ### Live CARLA Integration Test (Run on CARLA Host)
 

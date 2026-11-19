@@ -104,12 +104,10 @@ class TestMinimapCoordinateTransformation(unittest.TestCase):
     """Verifies 2D projection, aspect-ratio preservation, and inverted Y-axis."""
 
     def setUp(self):
-        self.checkpoints = load_checkpoints(DEFAULT_CONFIG_PATH)
         self.minimap = Minimap(
             size=260,
             position="top-right",
             opacity=0.85,
-            checkpoints=self.checkpoints,
             road_cache_path=DEFAULT_ROAD_CACHE_PATH,
             padding=14,
         )
@@ -137,15 +135,18 @@ class TestMinimapCoordinateTransformation(unittest.TestCase):
             f"West X pixel ({px_west}) must be less than East X pixel ({px_east})",
         )
 
-    def test_bounds_within_panel(self):
-        """Verify that all checkpoints map to pixel coordinates inside the panel."""
+    def test_route_markers_stay_inside_the_panel(self):
+        """Verify Start and Destination are not clipped by the minimap border."""
         size = self.minimap.size
-        for cp in self.checkpoints:
-            px, py = self.minimap.world_to_pixel(cp.x, cp.y)
-            self.assertGreaterEqual(px, 0, f"{cp.id} px ({px}) < 0")
-            self.assertLess(px, size, f"{cp.id} px ({px}) >= {size}")
-            self.assertGreaterEqual(py, 0, f"{cp.id} py ({py}) < 0")
-            self.assertLess(py, size, f"{cp.id} py ({py}) >= {size}")
+        for marker in (
+            self.minimap.start_location,
+            self.minimap.destination_location,
+        ):
+            px, py = self.minimap.world_to_pixel(*marker)
+            self.assertGreater(px, 0)
+            self.assertLess(px, size - 1)
+            self.assertGreater(py, 0)
+            self.assertLess(py, size - 1)
 
     def test_aspect_ratio_uniformity(self):
         """Verify scaling factor is isotropic to avoid road and roundabout distortion."""

@@ -420,29 +420,38 @@ def main():
 
         minimap = None
         if args.minimap:
-            try:
-                from visualization.minimap import Minimap
-                from navigation.checkpoints import load_or_generate_checkpoints
+            from visualization.minimap import (
+                Minimap,
+                road_cache_path_for_map,
+            )
 
-                cp_config = args.checkpoints_config or os.path.join("config", "checkpoints_town03.json")
-                checkpoints = load_or_generate_checkpoints(world.get_map(), cp_config)
-                carla_map_arg = world.get_map() if args.refresh_map_cache else None
-                minimap = Minimap(
-                    size=args.minimap_size,
-                    position=args.minimap_position,
-                    opacity=args.minimap_opacity,
-                    carla_map=carla_map_arg,
-                    checkpoints=checkpoints,
-                    checkpoints_path=cp_config,
-                )
-                print(
-                    f"[minimap] Enabled ({args.minimap_position}, size={args.minimap_size}px, "
-                    f"opacity={args.minimap_opacity}, {len(checkpoints)} checkpoints)"
-                )
-            except Exception as exc:
-                print(f"[minimap] Warning: Could not initialize minimap: {exc}")
-                traceback.print_exc()
-                minimap = None
+            map_name = world.get_map().name
+            road_cache_path = road_cache_path_for_map(map_name)
+            carla_map_arg = (
+                world.get_map()
+                if args.refresh_map_cache or not os.path.isfile(road_cache_path)
+                else None
+            )
+            minimap = Minimap(
+                size=args.minimap_size,
+                position=args.minimap_position,
+                opacity=args.minimap_opacity,
+                carla_map=carla_map_arg,
+                road_cache_path=road_cache_path,
+                map_name=map_name,
+                preferred_start=(
+                    ego_spawn.location.x,
+                    ego_spawn.location.y,
+                ),
+            )
+            print(
+                f"[minimap] Enabled for {map_name} "
+                f"({args.minimap_position}, size={args.minimap_size}px, "
+                f"opacity={args.minimap_opacity}, "
+                f"start={minimap.start_location}, "
+                f"destination={minimap.destination_location}, "
+                f"cache={road_cache_path})"
+            )
 
         print("[ready] CARLA live demo")
         if args.navigation:
