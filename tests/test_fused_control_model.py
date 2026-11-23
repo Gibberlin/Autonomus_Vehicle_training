@@ -1,5 +1,6 @@
 import json
 from queue import Queue
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,12 @@ import cv2
 import numpy as np
 import torch
 
-from capture_fusion_dataset import decode_depth, decode_semantic, receive_frame
+from capture_fusion_dataset import (
+    decode_depth,
+    decode_semantic,
+    random_weather,
+    receive_frame,
+)
 from fused_control_model import (
     FusedControlDataset,
     FusedControlModel,
@@ -85,6 +91,18 @@ class TestFusedControlModel(unittest.TestCase):
         sensor_queue.put(SimpleNamespace(frame=4))
         sensor_queue.put(SimpleNamespace(frame=5))
         self.assertEqual(receive_frame(sensor_queue, 5, 0.1).frame, 5)
+
+    def test_weather_sampler_varies_conditions_with_valid_ranges(self):
+        class FakeWeather:
+            pass
+
+        weather = random_weather(
+            SimpleNamespace(WeatherParameters=FakeWeather), random.Random(12)
+        )
+        self.assertGreaterEqual(weather.cloudiness, 0.0)
+        self.assertLessEqual(weather.cloudiness, 85.0)
+        self.assertGreaterEqual(weather.sun_altitude_angle, 10.0)
+        self.assertLessEqual(weather.sun_altitude_angle, 85.0)
 
 
 if __name__ == "__main__":

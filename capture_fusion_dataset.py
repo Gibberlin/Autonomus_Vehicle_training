@@ -94,7 +94,7 @@ def state_for(ego):
     }
 
 
-def random_weather(carla, episode, rng):
+def random_weather(carla, rng):
     weather = carla.WeatherParameters()
     weather.cloudiness = rng.uniform(0, 85)
     weather.precipitation = rng.choice((0.0, 0.0, 0.0, rng.uniform(5, 50)))
@@ -102,7 +102,7 @@ def random_weather(carla, episode, rng):
     weather.wetness = max(weather.precipitation_deposits, weather.precipitation)
     weather.wind_intensity = rng.uniform(0, 60)
     weather.sun_altitude_angle = rng.uniform(10, 85)
-    weather.sun_azimuth_angle = float((episode * 73 + rng.randrange(360)) % 360)
+    weather.sun_azimuth_angle = float(rng.randrange(360))
     return weather
 
 
@@ -115,20 +115,21 @@ def capture_episode(client, world, carla, args, episode_id, manifest, rng):
     tm = client.get_trafficmanager(args.tm_port)
     tm.set_synchronous_mode(True)
     original_settings = world.get_settings()
+    original_weather = world.get_weather()
     settings = world.get_settings()
     settings.synchronous_mode = True
     settings.fixed_delta_seconds = args.fixed_delta
     world.apply_settings(settings)
-    world.set_weather(random_weather(carla, episode_id, rng))
 
     actors = []
     queues = {}
     sensor_names = ("rgb", "depth", "semantic", "lidar", "radar")
     episode_dir = Path(args.out) / episode_id
-    for name in ("rgb", "depth", "semantic", "lidar", "radar"):
-        (episode_dir / name).mkdir(parents=True, exist_ok=True)
 
     try:
+        world.set_weather(random_weather(carla, rng))
+        for name in ("rgb", "depth", "semantic", "lidar", "radar"):
+            (episode_dir / name).mkdir(parents=True, exist_ok=True)
         ego = world.try_spawn_actor(bp.find("vehicle.tesla.model3"), spawns.pop())
         if ego is None:
             raise RuntimeError(f"Could not spawn ego vehicle for {episode_id}")
@@ -148,6 +149,35 @@ def capture_episode(client, world, carla, args, episode_id, manifest, rng):
                 npc.set_autopilot(True, tm.get_port())
                 actors.append(npc)
                 spawned += 1
+        walker_controller_bp = bp.find("controller.ai.walker")
+        walker_blueprints = bp.filter("walker.pedestrian.*")
+        walker_count = rng.randint(args.walkers // 2, args.walkers)
+        spawned_walkers = 0
+        walker_controllers = []
+        for _ in range(walker_count):
+            location = world.get_random_location_from_navigation()
+            if location is None:
+                continue
+            walker = world.try_spawn_actor(
+                rng.choice(walker_blueprints), carla.Transform(location)
+            )
+            if walker is None:
+                continue
+            actors.append(walker)
+            controller = world.spawn_actor(
+                walker_controller_bp, carla.Transform(), attach_to=walker
+            )
+            actors.append(controller)
+            walker_controllers.append(controller)
+            spawned_walkers += 1
+        if walker_controllers:
+            world.tick()
+        for controller in walker_controllers:
+            destination = world.get_random_location_from_navigation()
+            controller.start()
+            if destination is not None:
+                controller.go_to_location(destination)
+            controller.set_max_speed(rng.uniform(1.0, 1.8))
 
         carla_transform = carla.Transform(carla.Location(x=1.5, z=2.0))
         common = {"image_size_x": args.width, "image_size_y": args.height,
@@ -278,7 +308,8 @@ def capture_episode(client, world, carla, args, episode_id, manifest, rng):
                 elapsed = time.monotonic() - frame_started
                 print(
                     f"[{episode_id}] {samples}/{args.samples_per_episode} "
-                    f"samples; NPCs={spawned}; {samples / max(elapsed, 1e-6):.1f} Hz"
+                    f"samples; NPCs={spawned}, walkers={spawned_walkers}; "
+                    f"{samples / max(elapsed, 1e-6):.1f} Hz"
                 )
 
     finally:
@@ -291,6 +322,7 @@ def capture_episode(client, world, carla, args, episode_id, manifest, rng):
                 carla.command.DestroyActor(actor.id) for actor in alive
             ])
         tm.set_synchronous_mode(False)
+        world.set_weather(original_weather)
         world.apply_settings(original_settings)
 
 
@@ -305,6 +337,7 @@ def main():
     parser.add_argument("--episodes-per-town", type=int, default=3)
     parser.add_argument("--samples-per-episode", type=int, default=1200)
     parser.add_argument("--vehicles", type=int, default=20)
+    parser.add_argument("--walkers", type=int, default=10)
     parser.add_argument("--fixed-delta", type=float, default=0.05)
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=180)
@@ -328,8 +361,9 @@ def main():
         parser.error("fixed delta and image dimensions must be positive")
     if args.recovery_interval < 0 or args.recovery_ticks <= 0:
         parser.error("recovery interval must be non-negative and ticks positive")
-    if args.episodes_per_town <= 0 or args.samples_per_episode <= 0 or args.vehicles < 0:
-        parser.error("episode/sample counts must be positive and vehicles non-negative")
+    if (args.episodes_per_town <= 0 or args.samples_per_episode <= 0
+            or args.vehicles < 0 or args.walkers < 0):
+        parser.error("episode/sample counts must be positive and traffic counts non-negative")
     args.out.mkdir(parents=True, exist_ok=True)
     manifest_path = args.out / "manifest.jsonl"
     towns = [town.strip() for town in args.towns.split(",") if town.strip()]
@@ -346,17 +380,28 @@ def main():
 
     client = carla.Client(args.host, args.port)
     client.set_timeout(30.0)
+    original_world = client.get_world()
+    original_town = original_world.get_map().name.rsplit("/", 1)[-1]
+    original_settings = original_world.get_settings()
+    original_weather = original_world.get_weather()
     run_id = time.strftime("%Y%m%d_%H%M%S")
-    with manifest_path.open("a", encoding="utf-8") as manifest:
-        for town in towns:
-            world = client.load_world(town)
-            for episode in range(args.episodes_per_town):
-                episode_id = f"{town}_{run_id}_episode_{episode:03d}"
-                print(f"[capture] {episode_id}")
-                capture_episode(
-                    client, world, carla, args, episode_id, manifest, rng
-                )
-                manifest.flush()
+    try:
+        with manifest_path.open("a", encoding="utf-8") as manifest:
+            for town in towns:
+                world = client.load_world(town)
+                for episode in range(args.episodes_per_town):
+                    episode_id = f"{town}_{run_id}_episode_{episode:03d}"
+                    print(f"[capture] {episode_id}")
+                    capture_episode(
+                        client, world, carla, args, episode_id, manifest, rng
+                    )
+                    manifest.flush()
+    finally:
+        current_world = client.get_world()
+        if current_world.get_map().name.rsplit("/", 1)[-1] != original_town:
+            current_world = client.load_world(original_town)
+        current_world.set_weather(original_weather)
+        current_world.apply_settings(original_settings)
     print(f"Dataset manifest: {manifest_path}")
 
 

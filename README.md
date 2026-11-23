@@ -109,8 +109,8 @@ python capture_fusion_dataset.py --towns Town01,Town03,Town05 --episodes-per-tow
 python train_fusion_model.py --data fusion_data --epochs 50
 ```
 
-The recorder varies weather and traffic density and periodically adds a brief
-steering disturbance, then records the Traffic Manager's recovery controls.
+The recorder varies weather, vehicle/pedestrian density, and periodically adds
+a brief steering disturbance, then records the Traffic Manager's recovery controls.
 Samples are frame-synchronized and include timestamps. Training holds out whole
 episodes for validation and writes `steer_fusion.pth`. Evaluate it in CARLA with
 either demo using `--fusion-weights steer_fusion.pth`; this enables the matching

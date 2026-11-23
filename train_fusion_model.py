@@ -1,7 +1,6 @@
 """Train the fused camera, LiDAR, radar, and vehicle-state control model."""
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
@@ -116,6 +115,8 @@ def main():
 
         model.eval()
         validation_loss = 0.0
+        absolute_error = np.zeros(3, dtype=np.float64)
+        validation_count = 0
         with torch.no_grad():
             for images, lidar, radar, state, target in val_loader:
                 prediction = model(
@@ -125,7 +126,12 @@ def main():
                 validation_loss += criterion(
                     prediction, target.to(device)
                 ).item() * len(images)
+                absolute_error += np.abs(
+                    prediction.cpu().numpy() - target.numpy()
+                ).sum(axis=0)
+                validation_count += len(images)
         validation_loss /= len(val_indices)
+        validation_mae = absolute_error / validation_count
 
         if validation_loss < best_loss:
             best_loss = validation_loss
@@ -148,7 +154,10 @@ def main():
             marker = ""
         print(
             f"epoch {epoch + 1:3d}/{args.epochs} "
-            f"train={train_loss:.5f} val={validation_loss:.5f}{marker}"
+            f"train={train_loss:.5f} val={validation_loss:.5f} "
+            f"MAE steer/throttle/brake="
+            f"{validation_mae[0]:.3f}/{validation_mae[1]:.3f}/"
+            f"{validation_mae[2]:.3f}{marker}"
         )
 
     print(f"Best validation loss: {best_loss:.6f}")

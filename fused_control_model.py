@@ -182,6 +182,8 @@ class FusedSteeringController:
         if not checkpoint.is_file():
             raise FileNotFoundError(f"Fused steering checkpoint not found: {checkpoint}")
         saved = torch.load(checkpoint, map_location=device, weights_only=True)
+        if saved.get("state_features") != list(STATE_FEATURES):
+            raise ValueError(f"Unsupported state feature schema in {checkpoint}")
         self.device = torch.device(device)
         self.model = FusedControlModel().to(self.device)
         self.model.load_state_dict(saved["model_state"])
@@ -227,10 +229,14 @@ class FusedSteeringController:
             torch.from_numpy(radar).unsqueeze(0).to(self.device),
             torch.from_numpy(state_values).unsqueeze(0).to(self.device),
         )[0].cpu().numpy()
+        throttle = float(np.clip(output[1], 0.0, 1.0))
+        brake = float(np.clip(output[2], 0.0, 1.0))
+        if brake > 0.15:
+            throttle = 0.0
         return {
             "steer": float(np.clip(output[0], -1.0, 1.0)),
-            "throttle": float(np.clip(output[1], 0.0, 1.0)),
-            "brake": float(np.clip(output[2], 0.0, 1.0)),
+            "throttle": throttle,
+            "brake": brake,
         }
 
 
