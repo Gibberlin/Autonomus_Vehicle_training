@@ -74,6 +74,11 @@ python live_demo.py --no-navigation
 supports Town03 and uses spawn point 0 plus the checkpoints in
 `config/checkpoints_town03.json`. Navigation contributes 75% of hybrid steering;
 the model contributes 25%. Navigation provides route speed and hazard braking.
+The live demo also applies a full-brake safety stop when a CARLA vehicle or
+pedestrian comes within 5 m of the ego vehicle's bounding box; it resumes normal
+control once the nearest actor is beyond 6 m. The HUD and console show the
+traffic-light state affecting the ego vehicle, with console updates when it
+changes.
 
 Useful live-demo options include:
 

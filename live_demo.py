@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import math
 import os
 import queue
 import random
@@ -28,6 +29,8 @@ CAMERA_HEIGHT_M = 2.0
 LANE_HALF_WIDTH_M = 1.8
 DETECTION_CLASSES = [0, 1, 2, 3, 5, 7]
 LEAD_CLASSES = {2, 3, 5, 7}
+OBSTACLE_STOP_DISTANCE_M = 5.0
+OBSTACLE_CLEAR_DISTANCE_M = 6.0
 
 
 class YoloWorker:
@@ -168,6 +171,67 @@ def speed_kmh(vehicle):
     return 3.6 * (velocity.x**2 + velocity.y**2 + velocity.z**2) ** 0.5
 
 
+def nearest_obstacle_distance(ego, actors):
+    ego_transform = ego.get_transform()
+    ego_box = ego.bounding_box
+    ego_yaw = math.radians(ego_transform.rotation.yaw)
+    cos_yaw, sin_yaw = math.cos(ego_yaw), math.sin(ego_yaw)
+    nearest = None
+
+    for actor in actors:
+        if actor.id == ego.id:
+            continue
+        actor_transform = actor.get_transform()
+        actor_box = actor.bounding_box
+        dx = actor_transform.location.x - ego_transform.location.x
+        dy = actor_transform.location.y - ego_transform.location.y
+        dz = actor_transform.location.z - ego_transform.location.z
+        forward = dx * cos_yaw + dy * sin_yaw
+        lateral = -dx * sin_yaw + dy * cos_yaw
+
+        relative_yaw = math.radians(
+            actor_transform.rotation.yaw - ego_transform.rotation.yaw
+        )
+        cos_relative = abs(math.cos(relative_yaw))
+        sin_relative = abs(math.sin(relative_yaw))
+        actor_forward_extent = (
+            cos_relative * actor_box.extent.x + sin_relative * actor_box.extent.y
+        )
+        actor_lateral_extent = (
+            sin_relative * actor_box.extent.x + cos_relative * actor_box.extent.y
+        )
+        forward_gap = max(
+            0.0, abs(forward) - ego_box.extent.x - actor_forward_extent
+        )
+        lateral_gap = max(
+            0.0, abs(lateral) - ego_box.extent.y - actor_lateral_extent
+        )
+        vertical_gap = max(
+            0.0, abs(dz) - ego_box.extent.z - actor_box.extent.z
+        )
+        distance = math.sqrt(
+            forward_gap**2 + lateral_gap**2 + vertical_gap**2
+        )
+        if nearest is None or distance < nearest:
+            nearest = distance
+    return nearest
+
+
+def should_apply_emergency_brake(active, obstacle_distance):
+    if obstacle_distance is None:
+        return False
+    limit = OBSTACLE_CLEAR_DISTANCE_M if active else OBSTACLE_STOP_DISTANCE_M
+    return obstacle_distance <= limit
+
+
+def traffic_light_status(vehicle):
+    light = vehicle.get_traffic_light()
+    if light is None:
+        return "NONE"
+    state = light.get_state()
+    return str(getattr(state, "name", state)).rsplit(".", 1)[-1].upper()
+
+
 def find_lead(boxes, classes, width, height):
     cx, cy = width / 2.0, height / 2.0
     focal = width / (2.0 * np.tan(np.radians(CAMERA_FOV / 2.0)))
@@ -303,6 +367,9 @@ def main():
     previous_location = None
     steer_previous = 0.0
     state = {"auto": args.start_autopilot}
+    failsafe_active = False
+    last_traffic_light_state = None
+    safety_stop_frames = 0
     stats = {"collisions": 0, "invasions": 0, "collisions_model": 0, "invasions_model": 0}
     stats_lock = threading.Lock()
     started_at = time.perf_counter()
@@ -442,6 +509,7 @@ def main():
             "route_progress_m", "steer_ms", "yolo_ms",
             "yolo_age_frames", "pipeline_ms", "detections", "lead_distance_m",
             "collisions", "lane_invasions", "distance_m",
+            "obstacle_distance_m", "failsafe_active", "traffic_light_state",
         ])
 
         minimap = None
@@ -517,6 +585,37 @@ def main():
                 yolo_classes = np.empty((0,), dtype=int)
 
             lead = find_lead(yolo_boxes, yolo_classes, frame.shape[1], frame.shape[0])
+            world_actors = world.get_actors()
+            obstacle_actors = (
+                list(world_actors.filter("vehicle.*"))
+                + list(world_actors.filter("walker.pedestrian.*"))
+            )
+            obstacle_distance = nearest_obstacle_distance(ego, obstacle_actors)
+            was_failsafe_active = failsafe_active
+            failsafe_active = should_apply_emergency_brake(
+                failsafe_active, obstacle_distance
+            )
+            if failsafe_active and not was_failsafe_active:
+                if state["auto"]:
+                    ego.set_autopilot(False)
+                distance_text = (
+                    f"{obstacle_distance:.1f} m"
+                    if obstacle_distance is not None
+                    else "unknown"
+                )
+                print(
+                    f"[safety] Emergency stop: nearby actor at {distance_text}"
+                )
+            elif was_failsafe_active and not failsafe_active:
+                if state["auto"]:
+                    ego.set_autopilot(True, tm.get_port())
+                print("[safety] Obstacle clear; resuming normal control")
+
+            traffic_light_state = traffic_light_status(ego)
+            if traffic_light_state != last_traffic_light_state:
+                print(f"[traffic-light] {traffic_light_state}")
+                last_traffic_light_state = traffic_light_state
+
             speed = speed_kmh(ego)
             location = ego.get_location()
             if previous_location is not None:
@@ -594,6 +693,19 @@ def main():
                     brake=brake,
                 ))
                 model_time_run += args.fixed_delta
+            if failsafe_active:
+                safety_stop_frames += 1
+                throttle, brake = 0.0, 1.0
+                safety_steer = (
+                    steer_autopilot
+                    if steer_autopilot is not None
+                    else steer_command
+                )
+                ego.apply_control(carla.VehicleControl(
+                    throttle=0.0,
+                    steer=safety_steer,
+                    brake=1.0,
+                ))
 
             pipeline_ms = (time.perf_counter() - pipeline_start) * 1000
             sim_time_run += args.fixed_delta
@@ -612,6 +724,8 @@ def main():
                 if state["auto"]
                 else "model+navigation" if navigation_agent is not None else "model"
             )
+            if failsafe_active:
+                mode_name = f"failsafe+{mode_name}"
             telemetry_writer.writerow([
                 round(sim_time_run, 2),
                 int(world_frame),
@@ -635,6 +749,9 @@ def main():
                 collision_count,
                 invasion_count,
                 round(distance, 2),
+                "" if obstacle_distance is None else round(obstacle_distance, 2),
+                int(failsafe_active),
+                traffic_light_state,
             ])
             if frames_run % 20 == 0:
                 telemetry.flush()
@@ -662,6 +779,37 @@ def main():
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
                 (255, 255, 255),
+                1,
+            )
+            traffic_light_color = {
+                "RED": (0, 0, 255),
+                "YELLOW": (0, 255, 255),
+                "GREEN": (0, 255, 0),
+            }.get(traffic_light_state, (200, 200, 200))
+            cv2.putText(
+                display,
+                f"Traffic light: {traffic_light_state}",
+                (8, 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                traffic_light_color,
+                1,
+            )
+            if failsafe_active and obstacle_distance is not None:
+                safety_text = f"EMERGENCY BRAKE | obstacle {obstacle_distance:.1f} m"
+            elif failsafe_active:
+                safety_text = "EMERGENCY BRAKE"
+            elif obstacle_distance is not None:
+                safety_text = f"Safety clear | nearest actor {obstacle_distance:.1f} m"
+            else:
+                safety_text = "Safety clear | no nearby actors"
+            cv2.putText(
+                display,
+                safety_text,
+                (8, 80),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 0, 255) if failsafe_active else (0, 220, 0),
                 1,
             )
             if navigation_agent is not None:
@@ -693,15 +841,25 @@ def main():
                 break
             if key == ord("m") and state["auto"]:
                 ego.set_autopilot(False)
-                ego.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=0.0))
+                if not failsafe_active:
+                    ego.apply_control(carla.VehicleControl(
+                        throttle=0.0, steer=0.0, brake=0.0
+                    ))
                 state["auto"] = False
                 steer_previous = 0.0
                 print("[mode] KITTI controller now has control")
             elif key == ord("a") and not state["auto"]:
-                ego.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=0.0))
-                ego.set_autopilot(True, tm.get_port())
                 state["auto"] = True
-                print("[mode] CARLA autopilot now has control")
+                if failsafe_active:
+                    print(
+                        "[mode] CARLA autopilot will resume after the safety stop"
+                    )
+                else:
+                    ego.apply_control(carla.VehicleControl(
+                        throttle=0.0, steer=0.0, brake=0.0
+                    ))
+                    ego.set_autopilot(True, tm.get_port())
+                    print("[mode] CARLA autopilot now has control")
             if navigation_agent is not None and not state["auto"] and navigation_agent.done():
                 print("[finish] Fixed checkpoint route reached")
                 break
@@ -766,6 +924,7 @@ def main():
             "lane_invasions": final_stats["invasions"],
             "collisions_while_model_drove": final_stats["collisions_model"],
             "invasions_while_model_drove": final_stats["invasions_model"],
+            "safety_stop_frames": safety_stop_frames,
             "mean_pipeline_ms": round(pipeline_sum_run / max(frames_run, 1), 2),
             "mean_yolo_ms": round(yolo_sum_run / max(yolo_runs_run, 1), 2),
             "frames": frames_run,
