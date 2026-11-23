@@ -12,19 +12,20 @@ import cv2
 import numpy as np
 
 
-def receive_frame(sensor_queue, frame_number, timeout):
+def receive_frame(sensor_queue, frame_number, timeout, sensor_name="sensor"):
     while True:
         try:
             data = sensor_queue.get(timeout=timeout)
         except queue.Empty as exc:
             raise TimeoutError(
-                f"Sensor did not produce world frame {frame_number}"
+                f"{sensor_name} sensor did not produce world frame {frame_number}"
             ) from exc
         if data.frame == frame_number:
             return data
         if data.frame > frame_number:
             raise RuntimeError(
-                f"Sensor frame mismatch: expected {frame_number}, got {data.frame}"
+                f"{sensor_name} sensor frame mismatch: expected {frame_number}, "
+                f"got {data.frame}"
             )
 
 
@@ -212,9 +213,13 @@ def capture_episode(client, world, carla, args, episode_id, manifest, rng):
             sensor.listen(queues[name].put)
 
         for _ in range(args.warmup):
-            frame = world.tick()
-            for name in sensor_names:
-                receive_frame(queues[name], frame, args.sensor_timeout)
+            world.tick()
+            for sensor_queue in queues.values():
+                while True:
+                    try:
+                        sensor_queue.get_nowait()
+                    except queue.Empty:
+                        break
 
         samples = 0
         next_recovery = args.recovery_interval or args.samples_per_episode + 1
@@ -238,7 +243,9 @@ def capture_episode(client, world, carla, args, episode_id, manifest, rng):
 
             frame = world.tick()
             sensor_data = {
-                name: receive_frame(queues[name], frame, args.sensor_timeout)
+                name: receive_frame(
+                    queues[name], frame, args.sensor_timeout, name
+                )
                 for name in sensor_names
             }
             if intervention_left > 0:

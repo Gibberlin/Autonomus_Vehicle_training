@@ -6,6 +6,7 @@
 /PythonAPI/
 /CarlaUE4.exe
 /GlobalShaderCache-*.bin
+/fusion_data
 
 # Local Python environment and caches.
 /carla-env/

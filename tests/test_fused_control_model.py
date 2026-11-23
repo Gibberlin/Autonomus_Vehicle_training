@@ -90,7 +90,9 @@ class TestFusedControlModel(unittest.TestCase):
         sensor_queue = Queue()
         sensor_queue.put(SimpleNamespace(frame=4))
         sensor_queue.put(SimpleNamespace(frame=5))
-        self.assertEqual(receive_frame(sensor_queue, 5, 0.1).frame, 5)
+        self.assertEqual(receive_frame(sensor_queue, 5, 0.1, "rgb").frame, 5)
+        with self.assertRaisesRegex(TimeoutError, "radar.*frame 6"):
+            receive_frame(Queue(), 6, 0.001, "radar")
 
     def test_weather_sampler_varies_conditions_with_valid_ranges(self):
         class FakeWeather:
