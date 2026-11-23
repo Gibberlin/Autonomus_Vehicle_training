@@ -123,7 +123,6 @@ for ep in range(a.epochs):
     print(f"epoch {ep+1:2d}  train loss {tot/nb:.4f}  val MAE {mae:.4f}  val MAE on turns {mae_turn:.4f}  bias {bias:+.4f}{flag}")
 
 # ---- Diagnostics on the FINAL-epoch model ----
-torch.save(model.state_dict(), "steer_last.pt")
 pd.DataFrame(history, columns=["epoch", "train_loss", "val_mae", "val_mae_turns", "val_bias"]).to_csv(
     "results/steer_training_curve.csv", index=False)
 pv = predict_val().cpu().numpy(); t = yva.cpu().numpy(); ya = np.abs(t)
@@ -166,8 +165,8 @@ with torch.no_grad():
     if dev == "cuda": torch.cuda.synchronize()
 print(f"steering model: {(time.perf_counter() - t0) / 200 * 1000:.2f} ms/frame on {dev}")
 try:
-    torch.onnx.export(model.cpu(), torch.zeros(1, 3, 66, 200), "steer_model.onnx",
+    torch.onnx.export(model.cpu(), torch.zeros(1, 3, 66, 200), "pilotnet_model.onnx",
                       input_names=["image"], output_names=["steer"], opset_version=17)
-    print("exported steer_model.onnx")
+    print("exported pilotnet_model.onnx")
 except Exception as e:
     print("ONNX export skipped:", e)

@@ -29,6 +29,12 @@ __pycache__/
 *.pth
 *.onnx
 *.onnx.data
+# Current runtime models and the downloaded detector are retained.
+!/yolov8n.pt
+!/steer_model.pth
+!/steer_model_ts.pt
+!/steer_model.onnx
+!/steer_fusion.pth
 /detections_*.mp4
 /crop_check.png
 /baseline_*.csv

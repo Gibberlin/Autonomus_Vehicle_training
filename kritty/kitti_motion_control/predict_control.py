@@ -21,12 +21,13 @@ import torch.nn as nn
 # --------------------------------------------------
 
 BASE = Path(__file__).resolve().parent
-MODEL_DIR = BASE / "model"
+PROJECT_ROOT = BASE.parents[1]
+MODEL_DIR = PROJECT_ROOT
 DATA_DIR = BASE / "processed_data"
 
-MODEL_PATH = MODEL_DIR / "best_model.pth"
-TORCHSCRIPT_PATH = MODEL_DIR / "av_controller.pt"
-NORM_PATH = MODEL_DIR / "normalisation_params.csv"
+MODEL_PATH = MODEL_DIR / "steer_model.pth"
+TORCHSCRIPT_PATH = MODEL_DIR / "steer_model_ts.pt"
+NORM_PATH = MODEL_DIR / "steer_normalisation_params.csv"
 TEST_DATA_PATH = DATA_DIR / "test.csv"
 
 INPUT_FEATURES = [

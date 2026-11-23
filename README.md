@@ -124,8 +124,9 @@ python train_steer.py --data drive_data --epochs 30
 ```
 
 `train_steer.py` trains the legacy image-based PilotNet and writes
-`steer_model.pt`. It is separate from the current tabular controller and the
-new multimodal model.
+`steer_model.pt` and `pilotnet_model.onnx`. These legacy artifacts are not
+included by default; the script can regenerate them. PilotNet is separate from
+the current tabular controller and the new multimodal model.
 
 ### Multimodal collection
 
@@ -211,7 +212,8 @@ python our_model_demo.py --fusion-weights steer_fusion.pth
 The demos attach synchronized depth, semantic, LiDAR, and radar sensors when
 `--fusion-weights` is provided. If the argument is omitted, the demos continue
 using the existing tabular `steer_model.pth`. Fusion training and data collection
-are user-run workflows; a fusion checkpoint is not included by default.
+are user-run workflows; if `steer_fusion.pth` is unavailable, run the training
+command above before enabling fusion in a demo.
 
 ## Navigation and minimap
 

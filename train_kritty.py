@@ -8,7 +8,6 @@ are unavailable, so they remain zero for this dataset.
 
 import argparse
 from pathlib import Path
-import shutil
 
 import numpy as np
 import pandas as pd
@@ -183,9 +182,6 @@ def main():
 
     best_loss = float("inf")
     best_path = MODEL_DIR / "steer_model.pth"
-    backup_path = MODEL_DIR / "steer_model.pre_kritty.pth"
-    if best_path.is_file():
-        shutil.copy2(best_path, backup_path)
 
     print(f"Training on {cut} frames, validating on {count - cut} frames")
     print(f"Device: {device}")
@@ -259,7 +255,6 @@ def main():
     print(f"Saved fine-tuned weights: {best_path}")
     print(f"Saved TorchScript model: {MODEL_DIR / 'steer_model_ts.pt'}")
     print(f"Best validation loss: {best_loss:.6f}")
-    print(f"Previous KITTI checkpoint: {backup_path}")
 
 
 if __name__ == "__main__":
