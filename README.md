@@ -58,16 +58,16 @@ selected map and run for two minutes:
 python live_demo.py --town Town03 --minimap --max-seconds 120
 ```
 
-To test the fixed route with PilotNet and navigation from the start:
+To test the fixed route with the KITTI controller and navigation from the start:
 
 ```powershell
-python live_demo.py --navigation --start-model --minimap --vehicles 0 --no-yolo --max-seconds 120
+python live_demo.py --start-model --minimap --vehicles 0 --no-yolo --max-seconds 120
 ```
 
-`--navigation` loads Town03 if needed, uses spawn point 0, and plans the P1–P10
-route from `config/checkpoints_town03.json`. Navigation supplies 75% of model
-mode steering and its route controller supplies speed and hazard braking.
-Without `--navigation`, the live demo keeps its normal behavior.
+Navigation is enabled by default and loads Town03 if needed, uses spawn point 0,
+and plans the P1–P10 route from `config/checkpoints_town03.json`. Navigation
+supplies 75% of model-mode steering and its route controller supplies speed and
+hazard braking. Pass `--no-navigation` to disable it.
 
 The dedicated route demo starts in hybrid PilotNet/navigation mode:
 
@@ -75,8 +75,8 @@ The dedicated route demo starts in hybrid PilotNet/navigation mode:
 python our_model_demo.py --vehicles 0 --no-yolo --max-seconds 120
 ```
 
-In `live_demo.py`, press `m` to switch from autopilot to PilotNet (hybrid when
-`--navigation` is enabled), `a` to return to autopilot, and `q` or `Esc` to
+In `live_demo.py`, press `m` to switch from autopilot to the KITTI controller
+(hybrid when navigation is enabled), `a` to return to autopilot, and `q` or `Esc` to
 quit. In `our_model_demo.py`, `m` selects hybrid steering, `r` selects the
 navigation-only baseline, and `q` or `Esc` quits.
 
@@ -93,8 +93,29 @@ python get_dataset.py --mode steer --samples 3000 --town Town03 --out drive_data
 python train_steer.py --data drive_data --epochs 30
 ```
 
-Training saves the selected model as `steer_model.pt`, which is the default
-weight file used by both demos.
+The legacy image-based `steer_model.pt` remains available for custom PilotNet
+training, while the CARLA demos now default to the new KITTI feature-based
+controller at `steer_model.pth`. Its normalisation parameters are loaded from
+`steer_normalisation_params.csv` in the project root.
+
+### Multimodal control model
+
+For aligned RGB, depth, semantic segmentation, LiDAR, radar, vehicle telemetry,
+traffic-light state, and speed-limit labels, run the synchronous recorder against
+a CARLA server:
+
+```powershell
+python capture_fusion_dataset.py --towns Town01,Town03,Town05 --episodes-per-town 3 --out fusion_data
+python train_fusion_model.py --data fusion_data --epochs 50
+```
+
+The recorder varies weather and traffic density and periodically adds a brief
+steering disturbance, then records the Traffic Manager's recovery controls.
+Samples are frame-synchronized and include timestamps. Training holds out whole
+episodes for validation and writes `steer_fusion.pth`. Evaluate it in CARLA with
+either demo using `--fusion-weights steer_fusion.pth`; this enables the matching
+depth/semantic/LiDAR/radar sensors. The existing `steer_model.pth` remains the
+default until a multimodal checkpoint has been collected and evaluated.
 
 ---
 
@@ -284,21 +305,21 @@ python live_demo.py
 ```
 
 ### In-Simulation Controls
-- `m`: Switch to PilotNet steering control (route-blended when `--navigation` is enabled).
+- `m`: Switch to KITTI controller steering (route-blended when navigation is enabled).
 - `a`: Switch to CARLA Traffic Manager autopilot.
 - `q` or `Esc`: Quit simulation and cleanly release actors and video writers.
 
 ---
 
-## 8. Route-Guided PilotNet Test
+## 8. Route-Guided KITTI Controller Test
 
 `our_model_demo.py` runs a deterministic Town03 route from spawn point 0 through
 checkpoints P1–P10 in `config/checkpoints_town03.json`. The default mode blends
-PilotNet steering (25%) with navigation steering (75%); press `r` for a pure
+KITTI controller steering (25%) with navigation steering (75%); press `r` for a pure
 navigation-controller baseline or `m` to return to the blend.
 
-`live_demo.py` preserves its normal behavior unless `--navigation` is enabled;
-with `--start-model`, it uses the same fixed route and steering blend.
+`live_demo.py` enables navigation by default. With `--start-model`, it uses the
+same fixed route and steering blend at startup.
 
 ```bash
 # Plan and report the route without spawning vehicles or driving:
@@ -308,7 +329,7 @@ python our_model_demo.py --plan-only
 python our_model_demo.py --vehicles 0 --no-yolo --max-seconds 120
 
 # Use the same fixed route in the live demo, starting with PilotNet:
-python live_demo.py --navigation --start-model --minimap --vehicles 0 --no-yolo --max-seconds 120
+python live_demo.py --start-model --minimap --vehicles 0 --no-yolo --max-seconds 120
 ```
 
 `our_model_demo.py` loads Town03 before planning. `live_demo.py --navigation`

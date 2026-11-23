@@ -24,12 +24,15 @@ CAMERA_HEIGHT_M = 2.0
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Drive a fixed Town03 checkpoint route using PilotNet and navigation"
+        description="Drive a fixed Town03 checkpoint route using the KITTI controller and navigation"
     )
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=2000)
     parser.add_argument("--tm-port", type=int, default=8000)
-    parser.add_argument("--weights", default="steer_model.pt")
+    parser.add_argument("--weights", default=r"steer_model.pth")
+    parser.add_argument("--norm", default=r"steer_normalisation_params.csv")
+    parser.add_argument("--fusion-weights", default=None,
+                        help="optional multimodal RGB/depth/semantic/LiDAR/radar checkpoint")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--vehicles", type=int, default=25, help="number of NPC vehicles")
     parser.add_argument("--target-speed", type=float, default=25.0, help="speed in km/h")
@@ -146,12 +149,20 @@ def main():
         except ImportError as exc:
             raise RuntimeError("This demo requires OpenCV and PyTorch") from exc
         try:
-            from pilotnet import PilotNet, preprocess
+            from kritty_motion_controller import (
+                KrittySteeringController,
+                build_carla_sensor_features,
+            )
+            from fused_control_model import (
+                FusedSteeringController,
+                build_runtime_state,
+            )
+            from fused_carla_sensors import FusionSensorRig
             from agents.navigation.basic_agent import BasicAgent
             from live_demo import YoloWorker, draw_distance_guide, find_lead
         except ImportError as exc:
             raise RuntimeError(
-                "pilotnet.py, live_demo.py, and CARLA's navigation dependencies must be available"
+                "kritty_motion_controller.py, live_demo.py, and CARLA's navigation dependencies must be available"
             ) from exc
 
         device = args.device
@@ -159,12 +170,21 @@ def main():
             device = "cuda" if torch.cuda.is_available() else "cpu"
         if device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA was requested but is not available")
-        if not os.path.isfile(args.weights):
-            raise FileNotFoundError(f"PilotNet weights not found: {args.weights}")
+        if args.fusion_weights and not os.path.isfile(args.fusion_weights):
+            raise FileNotFoundError(
+                f"Fused controller weights not found: {args.fusion_weights}"
+            )
+        if not args.fusion_weights and not os.path.isfile(args.weights):
+            raise FileNotFoundError(f"KITTI controller weights not found: {args.weights}")
 
-        model = PilotNet().to(device)
-        model.load_state_dict(torch.load(args.weights, map_location=device))
-        model.eval()
+        fusion_model = (
+            FusedSteeringController(args.fusion_weights, device)
+            if args.fusion_weights else None
+        )
+        model = (
+            None if fusion_model is not None
+            else KrittySteeringController(args.weights, args.norm, device)
+        )
 
         yolo_device = args.yolo_device or ("0" if device == "cuda" else "cpu")
         if not args.no_yolo:
@@ -227,6 +247,13 @@ def main():
         )
         sensors.append(camera)
         camera.listen(lambda image: enqueue_latest(camera_queue, image))
+        fusion_rig = None
+        if fusion_model is not None:
+            fusion_rig = FusionSensorRig(
+                world, ego, carla, args.fixed_delta,
+                CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FOV,
+            )
+            sensors.extend(fusion_rig.actors)
 
         collision_blueprint = blueprints.find("sensor.other.collision")
         collision_sensor = world.spawn_actor(
@@ -260,12 +287,12 @@ def main():
             "collisions", "lane_invasions",
         ])
 
-        print("[ready] PilotNet + navigation demo: fixed Town03 checkpoint route")
-        print("[keys] m: PilotNet + navigation | r: navigation baseline | q / Esc: quit")
-        print("[mode] PilotNet + navigation steering active")
+        print("[ready] KITTI controller + navigation demo: fixed Town03 checkpoint route")
+        print("[keys] m: KITTI controller + navigation | r: navigation baseline | q / Esc: quit")
+        print("[mode] KITTI controller + navigation steering active")
         print(
             f"[control] Navigation supplies {1.0 - MODEL_STEER_WEIGHT:.0%} of steering "
-            f"plus route speed and hazard braking; PilotNet supplies "
+            f"plus route speed and hazard braking; the KITTI controller supplies "
             f"{MODEL_STEER_WEIGHT:.0%} of steering"
         )
         if yolo is None:
@@ -287,21 +314,26 @@ def main():
                 if latest is not None:
                     yolo_frame_number, yolo_ms, yolo_boxes, yolo_classes = latest
 
-            model_frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
-            model_input = preprocess(model_frame)
-            model_tensor = (
-                torch.from_numpy(model_input).unsqueeze(0).to(device).float() / 255.0
-            )
-            with torch.no_grad():
-                if args.symmetric:
-                    flipped_tensor = torch.flip(model_tensor, dims=[-1])
-                    batch_in = torch.cat([model_tensor, flipped_tensor], dim=0)
-                    preds = model(batch_in)
-                    model_steer_raw = float((0.5 * (preds[0] - preds[1])).item())
-                else:
-                    model_steer_raw = float(model(model_tensor).item())
-                if args.steer_bias != 0.0:
-                    model_steer_raw -= args.steer_bias
+            if fusion_model is not None:
+                fusion_inputs = fusion_rig.read(int(image.frame))
+                fusion_control = fusion_model.predict(
+                    frame,
+                    fusion_inputs["depth"],
+                    fusion_inputs["semantic"],
+                    fusion_inputs["lidar"],
+                    fusion_inputs["radar"],
+                    build_runtime_state(ego),
+                )
+                model_steer_raw = fusion_control["steer"]
+            else:
+                sensor_values = build_carla_sensor_features(
+                    ego, yolo_boxes, yolo_classes
+                )
+                model_steer_raw, model_steer_deg = model.predict_steering(
+                    sensor_values
+                )
+            if args.steer_bias != 0.0:
+                model_steer_raw -= args.steer_bias
             if device == "cuda":
                 torch.cuda.synchronize()
             model_steer = float(
@@ -441,7 +473,7 @@ def main():
                 print("[mode] Navigation steering active")
             elif key == ord("m") and mode["name"] != "model+navigation":
                 mode["name"] = "model+navigation"
-                print("[mode] PilotNet + navigation steering active")
+                print("[mode] KITTI controller + navigation steering active")
 
             if agent.done():
                 print("[finish] Fixed checkpoint route reached")
