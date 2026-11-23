@@ -1,4 +1,4 @@
-"""Train the fused camera, LiDAR, radar, and vehicle-state control model."""
+"""Train the multimodal camera, LiDAR, radar, and vehicle-state control model."""
 
 import argparse
 from pathlib import Path
@@ -13,6 +13,7 @@ from fused_control_model import (
     FusedControlDataset,
     FusedControlModel,
     STATE_FEATURES,
+    episode_split_indices,
 )
 
 
@@ -48,14 +49,7 @@ def main():
 
     # Hold out complete episodes when possible, preventing adjacent-frame leakage.
     episode_ids = sorted(rows["episode_id"].unique())
-    if len(episode_ids) > 1:
-        val_ids = set(episode_ids[-max(1, round(len(episode_ids) * 0.2)):])
-        train_indices = rows.index[~rows["episode_id"].isin(val_ids)].tolist()
-        val_indices = rows.index[rows["episode_id"].isin(val_ids)].tolist()
-    else:
-        split = int(len(rows) * 0.8)
-        train_indices = list(range(split))
-        val_indices = list(range(split, len(rows)))
+    train_indices, val_indices = episode_split_indices(rows["episode_id"])
     if not train_indices or not val_indices:
         raise ValueError("Dataset split produced an empty train or validation set")
 

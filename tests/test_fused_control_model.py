@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import torch
 
-from capture_fusion_dataset import (
+from collect_data import (
     decode_depth,
     decode_semantic,
     random_weather,

@@ -27,6 +27,29 @@ LIDAR_POINTS = 2048
 RADAR_POINTS = 128
 
 
+def episode_split_indices(episode_ids, validation_fraction=0.2):
+    episode_ids = list(episode_ids)
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation_fraction must be between zero and one")
+    unique_episodes = sorted(set(episode_ids))
+    if len(unique_episodes) > 1:
+        validation_count = max(1, round(len(unique_episodes) * validation_fraction))
+        validation_episodes = set(unique_episodes[-validation_count:])
+        train_indices = [
+            index for index, episode in enumerate(episode_ids)
+            if episode not in validation_episodes
+        ]
+        validation_indices = [
+            index for index, episode in enumerate(episode_ids)
+            if episode in validation_episodes
+        ]
+    else:
+        split = int(len(episode_ids) * (1.0 - validation_fraction))
+        train_indices = list(range(split))
+        validation_indices = list(range(split, len(episode_ids)))
+    return train_indices, validation_indices
+
+
 class PointCloudEncoder(nn.Module):
     def __init__(self, output_size=64):
         super().__init__()

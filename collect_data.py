@@ -1,4 +1,4 @@
-"""Synchronous CARLA capture for aligned multimodal control training samples."""
+"""Collect synchronized CARLA RGB, depth, semantic, LiDAR, radar, and control data."""
 
 import argparse
 import json

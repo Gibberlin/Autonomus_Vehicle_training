@@ -1,400 +1,297 @@
-# CARLA Autonomous Vehicle Training and PilotNet Demos
+# CARLA Autonomous Vehicle Training
 
-This project trains and tests a camera-based PilotNet steering model in the CARLA
-simulator. It includes a live driving demo, optional YOLO object detection and a
-map-specific minimap, plus a fixed Town03 checkpoint route that combines
-PilotNet steering with CARLA's navigation controller.
+This repository contains CARLA simulation demos, steering controllers, dataset
+capture tools, and map/navigation utilities. The models and control examples are
+for simulator research and testing only; they are not validated for real-road or
+unsupervised vehicle use.
 
----
+## What is in the project
 
-## 1. Overview
+- **Live CARLA demo** ([live_demo.py](./live_demo.py)): switches between CARLA
+  Traffic Manager autopilot and the project steering controller; supports
+  navigation, YOLO detections, telemetry, video, and the minimap.
+- **Fixed-route demo** ([our_model_demo.py](./our_model_demo.py)): runs the
+  Town03 route through checkpoints P1–P10, blending model and navigation
+  steering.
+- **Current tabular controller** ([kritty_motion_controller.py](./kritty_motion_controller.py)):
+  loads `steer_model.pth` and its `steer_normalisation_params.csv` statistics.
+- **Optional multimodal controller** ([fused_control_model.py](./fused_control_model.py)):
+  combines camera images, LiDAR, radar, and vehicle/rule-state inputs. Collect
+  data and train a checkpoint before enabling it.
+- **Legacy PilotNet** ([pilotnet.py](./pilotnet.py)): camera-only model and
+  preprocessing used by the legacy steering training workflow.
+- **Navigation and minimap** ([navigation/](./navigation),
+  [visualization/](./visualization)): fixed Town03 route planning, checkpoint
+  configuration, and map-specific road overlays.
 
-The project provides:
+## Setup
 
-- **PilotNet steering** from the forward camera, with autopilot/model switching in
-  the live demo.
-- **Navigation-assisted driving** on a repeatable Town03 route: fixed spawn
-  point 0, followed by checkpoints P1–P10. The hybrid mode weights navigation
-  steering at 75% and PilotNet at 25%.
-- **Optional YOLO detection**, lead-vehicle distance visualization, collision
-  and lane-invasion counters, CSV telemetry, and video recording.
-- **Optional map-specific minimap** with the active map's road network and a
-  live ego-vehicle heading indicator, plus only two static markers: Start and
-  Destination. The markers are selected from interior road samples.
-- **Dataset capture and training** scripts for collecting steering data and
-  training the PilotNet model.
-
-## 2. Quick Start
-
-### Requirements and setup
-
-Use a CARLA server and Python API with matching versions. This repository
-includes a Windows CARLA 0.9.16 wheel for CPython 3.12. From the repository root,
-create an environment and install the project dependencies and matching wheel:
+Use a CARLA server and Python API version that match. The bundled Windows CARLA
+0.9.16 wheel is for CPython 3.12. From the repository root, for example:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python -m pip install pandas matplotlib
 python -m pip install .\PythonAPI\carla\dist\carla-0.9.16-cp312-cp312-win_amd64.whl
 ```
 
-If you use a different Python version or operating system, install the CARLA
-Python API wheel that matches your interpreter and CARLA server instead.
+Install the matching CARLA wheel for your Python version and operating system if
+you do not use the bundled Windows wheel. `pandas` and `matplotlib` are used by
+the training and reporting scripts.
 
-Start CARLA on its default RPC port (`2000`), then run commands from the
-repository root. For the bundled Windows simulator:
+Start the simulator, then run Python commands from this repository:
 
 ```powershell
 .\CarlaUE4.exe -carla-server -quality-level=Low -windowed -ResX=1280 -ResY=720
 ```
 
-### Run a demo
+The standard RPC port is `2000`; Traffic Manager defaults to port `8000`.
 
-The standard live demo starts in CARLA autopilot mode. Enable the minimap for the
-selected map and run for two minutes:
+## Run the demos
+
+### Live demo
+
+Navigation is enabled by default and uses the fixed Town03 route. The demo starts
+in CARLA autopilot mode; press `m` to hand control to the project model, `a` to
+return to autopilot, and `q` or `Esc` to quit.
 
 ```powershell
-python live_demo.py --town Town03 --minimap --max-seconds 120
+# Start in autopilot; navigate Town03 and show the minimap
+python live_demo.py --town Town03 --minimap
+
+# Start with the project model, no NPCs or YOLO, for a short run
+python live_demo.py --start-model --vehicles 0 --no-yolo --max-seconds 120
+
+# Disable the fixed-route navigation behavior
+python live_demo.py --no-navigation
 ```
 
-To test the fixed route with the KITTI controller and navigation from the start:
+`--start-model` starts with the model rather than autopilot. `--navigation` and
+`--no-navigation` explicitly enable or disable navigation. Navigation currently
+supports Town03 and uses spawn point 0 plus the checkpoints in
+`config/checkpoints_town03.json`. Navigation contributes 75% of hybrid steering;
+the model contributes 25%. Navigation provides route speed and hazard braking.
+
+Useful live-demo options include:
+
+- `--host`, `--port`, `--tm-port`: CARLA and Traffic Manager connection settings.
+- `--vehicles`: number of NPC vehicles.
+- `--target-speed`: model-mode target speed in km/h.
+- `--no-yolo`: disable object detection.
+- `--video <path>`: save camera video.
+- `--no-display`: run without an OpenCV window.
+- `--minimap`, `--minimap-position`, `--minimap-size`, `--minimap-opacity`:
+  show and configure the road minimap.
+- `--checkpoints-config <path>`: use a custom Town03 route configuration.
+- `--refresh-map-cache`: rebuild the active map's road cache.
+
+Telemetry and demo results are written under `results/`.
+
+### Fixed Town03 route demo
+
+This demo starts in model-plus-navigation mode. Press `r` for navigation-only,
+`m` to return to the blend, and `q` or `Esc` to quit.
 
 ```powershell
-python live_demo.py --start-model --minimap --vehicles 0 --no-yolo --max-seconds 120
-```
+# Plan the route without spawning vehicles or driving
+python our_model_demo.py --plan-only
 
-Navigation is enabled by default and loads Town03 if needed, uses spawn point 0,
-and plans the P1–P10 route from `config/checkpoints_town03.json`. Navigation
-supplies 75% of model-mode steering and its route controller supplies speed and
-hazard braking. Pass `--no-navigation` to disable it.
-
-The dedicated route demo starts in hybrid PilotNet/navigation mode:
-
-```powershell
+# Run a short route test
 python our_model_demo.py --vehicles 0 --no-yolo --max-seconds 120
 ```
 
-In `live_demo.py`, press `m` to switch from autopilot to the KITTI controller
-(hybrid when navigation is enabled), `a` to return to autopilot, and `q` or `Esc` to
-quit. In `our_model_demo.py`, `m` selects hybrid steering, `r` selects the
-navigation-only baseline, and `q` or `Esc` quits.
+Both demos use `steer_model.pth` and `steer_normalisation_params.csv` by default.
+They accept `--weights` and `--norm` to select alternate tabular-model files.
 
-Both demos write telemetry under `results/`; `--video <path>` optionally saves
-the camera output. The results directory is ignored by Git.
+## Model workflows
 
-### Collect data and train
+There are two distinct dataset/model workflows. The old RGB-only steering
+dataset is **not** a substitute for the multimodal dataset: it does not contain
+depth, segmentation, LiDAR, radar, or the full state labels required by the
+fusion model.
 
-With CARLA available, capture a three-camera steering dataset and train the
-model:
+### Existing image-only dataset and PilotNet
+
+With CARLA running, `get_dataset.py` can collect center/left/right RGB images and
+steering, throttle, brake, and speed labels:
 
 ```powershell
 python get_dataset.py --mode steer --samples 3000 --town Town03 --out drive_data
 python train_steer.py --data drive_data --epochs 30
 ```
 
-The legacy image-based `steer_model.pt` remains available for custom PilotNet
-training, while the CARLA demos now default to the new KITTI feature-based
-controller at `steer_model.pth`. Its normalisation parameters are loaded from
-`steer_normalisation_params.csv` in the project root.
+`train_steer.py` trains the legacy image-based PilotNet and writes
+`steer_model.pt`. It is separate from the current tabular controller and the
+new multimodal model.
 
-### Multimodal control model
+### Multimodal collection
 
-For aligned RGB, depth, semantic segmentation, LiDAR, radar, vehicle telemetry,
-traffic-light state, and speed-limit labels, run the synchronous recorder against
-a CARLA server:
+[collect_data.py](./collect_data.py) records synchronous, same-frame sensor
+data and Traffic Manager control labels. It saves:
 
-```powershell
-python capture_fusion_dataset.py --towns Town01,Town03,Town05 --episodes-per-town 3 --out fusion_data
-python train_fusion_model.py --data fusion_data --epochs 50
-```
+- RGB, metric depth, and semantic-segmentation class images.
+- LiDAR points and radar detections (including relative velocity).
+- Speed, motion, traffic-light state, and speed limit.
+- Steering, throttle, brake, episode, weather, recovery flag, CARLA frame, and
+  simulation timestamp.
 
-The recorder varies weather, vehicle/pedestrian density, and periodically adds
-a brief steering disturbance, then records the Traffic Manager's recovery controls.
-Samples are frame-synchronized and include timestamps. Training holds out whole
-episodes for validation and writes `steer_fusion.pth`. Evaluate it in CARLA with
-either demo using `--fusion-weights steer_fusion.pth`; this enables the matching
-depth/semantic/LiDAR/radar sensors. The existing `steer_model.pth` remains the
-default until a multimodal checkpoint has been collected and evaluated.
+The recorder varies weather, vehicle and pedestrian counts, and periodically
+injects a brief steering disturbance. It then records the Traffic Manager's
+post-disturbance recovery controls. It reloads requested towns and restores the
+original map, weather, and world settings when it finishes. Collection temporarily
+controls the CARLA server; do not run it while another user depends on that
+server.
 
----
-
-## 3. Project Directory Structure
-
-```text
-Autonomus_Vehicle_training/
-│
-├── config/
-│   ├── checkpoints_town03.json    # 10 fixed checkpoints (P1-P10) coordinates, roads, GPS
-│   └── *_roads_cache.json          # Map-specific vector road caches
-│
-├── navigation/
-│   ├── __init__.py                 # Navigation module exports
-│   ├── checkpoints.py             # Checkpoint dataclass, manager, loader, and CARLA generator
-│   └── fixed_route.py              # Shared fixed Town03 route and steering blend
-│
-├── visualization/
-│   ├── __init__.py                 # Visualization module exports
-│   └── minimap.py                  # Minimap renderer, world-to-pixel projection, and OpenCV overlay
-│
-├── scripts/
-│   ├── create_map_cache.py         # Utility to generate Town03 vector road cache
-│   ├── generate_minimap_caches.py  # Generate caches and previews for CARLA's available maps
-│   └── render_offline_minimap.py   # Pure Python standalone minimap preview generator
-│
-├── tests/
-│   ├── test_minimap_offline.py       # 17 offline tests runnable without CARLA/GPU
-│   ├── test_minimap_map_selection.py # Map cache selection and validation tests
-│   └── test_model_navigation.py      # Route assembly and steering blend tests
-│
-├── generate_checkpoints.py         # Standalone CLI tool to generate/verify checkpoints
-├── verify_carla_minimap.py         # CARLA integration & diagnostic test suite for the simulator machine
-├── live_demo.py                    # Main simulation demo script with minimap integration
-├── our_model_demo.py               # PilotNet + navigation on a fixed Town03 route
-├── record_drive.py                 # Multi-camera dataset collection script
-├── pilotnet.py                     # PilotNet steering CNN architecture & preprocessing
-├── smoke_test.py                   # Minimal CARLA smoke test
-├── train_steer.py                  # PyTorch steering model training script
-├── requirements.txt                # Python package dependencies
-└── README.md                       # Complete documentation and user guide
-```
-
----
-
-## 4. Dependencies
-
-### Python Package Dependencies
-
-Install core dependencies using pip:
-
-```bash
-pip install -r requirements.txt
-```
-
-Core libraries required:
-- `numpy>=1.22.0`
-- `opencv-python>=4.6.0`
-- `torch>=2.0.0`
-- `ultralytics>=8.0.0`
-- `networkx>=2.8.0`
-
-### CARLA Simulator Host
-
-Run a CARLA server and install a matching Python API wheel on the demo machine.
-The bundled Windows wheel is CARLA 0.9.16 for CPython 3.12. The simulator and
-Python API versions must match.
-
-On the machine running CARLA:
-- CARLA server executable: `CarlaUE4.exe` (Windows) or `./CarlaUE4.sh` (Linux)
-- Python API: Ensure the CARLA `.whl` or `PythonAPI/carla` is installed in the simulation environment.
-
----
-
-## 5. The 10 Town03 Fixed Checkpoints
-
-The 10 predefined checkpoints are spatially distributed across Town03 regions matching the town layout:
-
-| Checkpoint | Region Description | Target World Coordinates (X, Y) | Road ID | Lane ID | S (m) | GPS (Lat, Lon) |
-|---|---|---|---|---|---|---|
-| **P1** | Central road near the roundabout | `(142.1, 195.4)` | 12 | -1 | 15.0 | `(0.001755, 0.001276)` |
-| **P2** | Roundabout approach/exit | `(125.3, 240.9)` | 10 | -1 | 22.5 | `(0.002164, 0.001126)` |
-| **P3** | Upper-left road junction | `(-188.5, 195.2)` | 1 | -1 | 35.0 | `(0.001753, -0.001693)` |
-| **P4** | Upper-middle junction | `(-12.4, 208.7)` | 2 | -1 | 42.0 | `(0.001875, -0.000111)` |
-| **P5** | Upper-right junction | `(218.6, 204.3)` | 3 | -1 | 50.0 | `(0.001835, 0.001964)` |
-| **P6** | Right-middle road junction | `(224.2, 12.8)` | 4 | -1 | 61.5 | `(0.000115, 0.002014)` |
-| **P7** | Lower-right road section | `(202.8, -178.6)` | 5 | -1 | 45.0 | `(-0.001604, 0.001822)` |
-| **P8** | Bottom-right curved road | `(108.4, -222.1)` | 6 | -1 | 32.0 | `(-0.001995, 0.000974)` |
-| **P9** | Bottom-left road section | `(-198.2, -192.5)` | 7 | -1 | 28.0 | `(-0.001729, -0.001780)` |
-| **P10** | Left-middle road junction | `(-212.7, 18.3)` | 8 | -1 | 72.0 | `(0.000164, -0.001911)` |
-
-All checkpoint coordinates are stored in `config/checkpoints_town03.json`.
-
----
-
-## 6. How to Generate or Regenerate Checkpoints
-
-To verify or regenerate checkpoints directly from the CARLA live map:
-
-### On the CARLA Machine
-
-Ensure CARLA is running (`localhost:2000`), then execute:
-
-```bash
-# Verify existing checkpoint configuration against the live map:
-python navigation/checkpoints.py
-
-# Force deterministic re-generation of checkpoints from live Town03 driving waypoints:
-python generate_checkpoints.py --town Town03
-# or:
-python navigation/checkpoints.py --generate --town Town03 --host localhost --port 2000
-```
-
-The generator will:
-1. Query all driving lane waypoints at 2-meter intervals.
-2. Filter out junction waypoints (`not wp.is_junction`).
-3. Deterministically select the 10 closest valid waypoints to the target regions.
-4. Calculate GPS coordinates using `carla_map.transform_to_geolocation()`.
-5. Save the updated configuration to `config/checkpoints_town03.json`.
-
----
-
-## 7. How to Run the Simulation with Minimap
-
-### Basic Execution with Minimap
-
-```bash
-# Run live demo with the minimap for Town03
-python live_demo.py --town Town03 --minimap
-```
-
-The minimap shows a Start marker snapped to an interior road sample near the
-vehicle's spawn point and a well-separated Destination marker on the road
-network. Markers are kept away from the minimap's outer bounds.
-
-To load the tagged Guwahati OpenDRIVE map and generate its minimap preview:
+Example recommended collection:
 
 ```powershell
-python LocalMap\load_guwahati.py
+python collect_data.py `
+  --towns Town01,Town03,Town05 `
+  --episodes-per-town 3 `
+  --samples-per-episode 1200 `
+  --vehicles 20 `
+  --walkers 10 `
+  --out fusion_data
 ```
 
-The script writes `results/minimap_previews/guwahati.png` and a map-specific
-road cache. Its Start and Destination are selected from CARLA driving
-waypoints, not from arbitrary image coordinates.
+For a small sensor-pipeline check, reduce the town list, episode count,
+`--samples-per-episode`, `--vehicles`, and `--walkers`. `--recovery-interval 0`
+disables the steering disturbances. `collect_data.py --help` lists all sensor,
+timing, and recovery options.
 
-The demo selects the road cache using the active CARLA map name. If that map's
-cache is missing, it builds and saves the cache from the live CARLA map. Caches
-are stored in `config/` (`town03_roads_cache.json` for Town03 and
-`<map>_roads_cache.json` for other maps). To pre-generate caches and 800px PNG
-previews for every drivable map reported by CARLA:
+Each run appends samples to `fusion_data/manifest.jsonl` and writes each episode's
+sensor files in a uniquely named subdirectory. Do not mix or rename individual
+sensor files without updating the manifest.
+
+### Train the multimodal model
+
+After collecting data, train with [train.py](./train.py):
 
 ```powershell
-python scripts\generate_minimap_caches.py
+python train.py --data fusion_data --epochs 50 --batch-size 8
 ```
 
-The generator skips existing caches; pass `--force` to refresh them. When it
-builds caches, it cycles the CARLA server through the required maps and restores
-the map that was active when it started. PNG previews are written to
-`results/minimap_previews/`; the `results/` directory is ignored by Git. To
-generate only selected maps, pass their names with `--maps`, for example:
+Training holds out complete episodes when possible, normalizes vehicle-state
+inputs, and writes the best validation checkpoint to `steer_fusion.pth` by
+default. Use `--output <path>` to select another checkpoint path. The model
+fuses the three RGB channels, depth, semantic class channel, LiDAR, radar, and
+state features to predict steering, throttle, and brake.
+
+### Compare the old and new iterations
+
+After the fusion checkpoint has been trained, compare it with the existing
+tabular model on the same held-out episodes:
 
 ```powershell
+python compare_models.py `
+  --data fusion_data `
+  --previous-weights steer_model.pth `
+  --fusion-weights steer_fusion.pth
+```
+
+The script writes `results/fusion_comparison.csv` with per-frame ground truth
+and predictions, plus `results/fusion_comparison.json` with MAE, RMSE, bias,
+and steering-direction accuracy for steering, throttle, and brake. It requires
+the previous model and normalization file, the trained fusion checkpoint, and
+the multimodal dataset. Compare metrics on the same held-out data; they are not
+a substitute for closed-loop CARLA evaluation.
+
+### Run a trained fusion checkpoint
+
+Once `steer_fusion.pth` exists, pass it to either demo:
+
+```powershell
+python live_demo.py --fusion-weights steer_fusion.pth --start-model
+python our_model_demo.py --fusion-weights steer_fusion.pth
+```
+
+The demos attach synchronized depth, semantic, LiDAR, and radar sensors when
+`--fusion-weights` is provided. If the argument is omitted, the demos continue
+using the existing tabular `steer_model.pth`. Fusion training and data collection
+are user-run workflows; a fusion checkpoint is not included by default.
+
+## Navigation and minimap
+
+The fixed route starts at Town03 spawn point 0 and visits P1–P10 from
+`config/checkpoints_town03.json`. The minimap uses a road cache for the active
+map; if a cache is missing, the live demo can build it from CARLA's map.
+
+```powershell
+# Refresh the active map's road cache while running the demo
+python live_demo.py --minimap --refresh-map-cache
+
+# Generate caches and previews for selected maps
 python scripts\generate_minimap_caches.py --maps Town01 Town03 Town05_Opt
+
+# Render a minimap without CARLA
+python scripts\render_offline_minimap.py
 ```
 
-### Configurable Minimap Options
+Map caches are stored under `config/`; generated previews and runtime outputs
+are stored under `results/`.
 
-```bash
-# Top-right corner (default), 260px panel, 85% opacity:
-python live_demo.py --town Town03 --minimap --minimap-position top-right --minimap-size 260 --minimap-opacity 0.85
+To inspect or regenerate Town03 checkpoints against a live CARLA map:
 
-# Top-left corner:
-python live_demo.py --town Town03 --minimap --minimap-position top-left --minimap-size 260 --minimap-opacity 0.85
-
-# Use a custom Town03 route checkpoint file (navigation mode):
-python live_demo.py --navigation --minimap --checkpoints-config config/checkpoints_town03.json
-
-# Force refresh of road topology cache from live CARLA world:
-python live_demo.py --town Town03 --minimap --refresh-map-cache
+```powershell
+python generate_checkpoints.py --town Town03 --host localhost --port 2000
 ```
 
-### Running Without Minimap (Existing Default Behavior)
+The canonical checkpoint configuration is
+`config/checkpoints_town03.json`.
 
-```bash
-# Normal simulation without minimap
-python live_demo.py
-```
+## Tests and diagnostics
 
-### In-Simulation Controls
-- `m`: Switch to KITTI controller steering (route-blended when navigation is enabled).
-- `a`: Switch to CARLA Traffic Manager autopilot.
-- `q` or `Esc`: Quit simulation and cleanly release actors and video writers.
+Run the offline test suite (no CARLA server or GPU required):
 
----
-
-## 8. Route-Guided KITTI Controller Test
-
-`our_model_demo.py` runs a deterministic Town03 route from spawn point 0 through
-checkpoints P1–P10 in `config/checkpoints_town03.json`. The default mode blends
-KITTI controller steering (25%) with navigation steering (75%); press `r` for a pure
-navigation-controller baseline or `m` to return to the blend.
-
-`live_demo.py` enables navigation by default. With `--start-model`, it uses the
-same fixed route and steering blend at startup.
-
-```bash
-# Plan and report the route without spawning vehicles or driving:
-python our_model_demo.py --plan-only
-
-# Run a short test without NPC traffic or YOLO:
-python our_model_demo.py --vehicles 0 --no-yolo --max-seconds 120
-
-# Use the same fixed route in the live demo, starting with PilotNet:
-python live_demo.py --start-model --minimap --vehicles 0 --no-yolo --max-seconds 120
-```
-
-`our_model_demo.py` loads Town03 before planning. `live_demo.py --navigation`
-loads Town03 only when it is not already active. Either can change the CARLA
-server's current map.
-
----
-
-## 9. Testing & Verification
-
-### Local Offline Tests (No CARLA or GPU Required)
-
-Run the comprehensive unit test suite on any development laptop:
-
-```bash
+```powershell
 python -m unittest discover -s tests
 ```
 
-The 17 minimap tests verify:
-- Checkpoint configuration integrity and uniqueness.
-- World-to-pixel coordinate projection.
-- Start and Destination selection from interior road points.
-- Inverted vertical axis handling (North maps to top of image).
-- Vehicle heading angle (yaw) to 2D pixel direction vectors.
-- Aspect-ratio preservation (circular roundabouts remain circular).
-- Road cache data validity and non-overlapping spatial distribution.
-- Overlay positioning and adaptive resizing.
+The suite covers minimap rendering and map selection, route assembly and
+navigation behavior, and multimodal model input/decoder behavior.
 
-Four map-selection tests cover normalized names and paths, preferred-start
-snapping, interior road-marker placement, and rejecting a cache for the wrong map.
-Four model-navigation tests cover route segment chaining, empty route handling,
-steering blending, and navigation-option parsing.
+For CARLA-specific diagnostics, run:
 
-### Generate Standalone Offline Minimap Preview
-
-```bash
-python scripts/render_offline_minimap.py
-```
-Outputs `results/offline_minimap_preview.bmp`, showing the road layout, the two
-road-snapped route markers, and the vehicle heading.
-
-### Live CARLA Integration Test (Run on CARLA Host)
-
-On the laptop running CARLA:
-
-```bash
+```powershell
 python verify_carla_minimap.py --host localhost --port 2000 --town Town03
+python smoke_test.py
 ```
 
-This diagnostic script validates:
-1. Python dependencies (NumPy, OpenCV, CARLA API).
-2. CARLA server connection and map verification.
-3. Checkpoint alignment with live driving lanes.
-4. Minimap rendering benchmark (< 0.1 ms/frame).
-5. Generates a composite verification frame saved to `results/carla_minimap_test.png`.
+These commands require a compatible CARLA Python API and a running server.
 
----
+## Key files
 
-## 10. Troubleshooting
+```text
+live_demo.py                  Main live CARLA demo
+our_model_demo.py             Fixed Town03 route demo
+get_dataset.py                Legacy RGB steering/perception data capture
+train_steer.py                Legacy PilotNet training
+train_kritty.py               Tabular Kritty model training from drive_data
+collect_data.py               Synchronized RGB/depth/semantic/LiDAR/radar capture
+train.py                      Multimodal fusion-model training
+compare_models.py             Held-out old-vs-new model comparison
+fused_control_model.py        Fusion architecture and dataset loader
+fused_carla_sensors.py        Synchronized fusion sensors for the demos
+kritty_motion_controller.py   Existing tabular model inference
+pilotnet.py                   Legacy image-only model
+navigation/                   Fixed route and checkpoint helpers
+visualization/minimap.py      CARLA road minimap
+config/                       Checkpoints, road caches, and settings
+tests/                        Offline unit tests
+```
 
-| Issue | Cause | Solution |
-|---|---|---|
-| `CARLA Python API unavailable` | CARLA egg/wheel not installed in environment | Install the CARLA `.whl` from your CARLA installation folder or append `PythonAPI/carla` to `PYTHONPATH`. |
-| `Could not connect to CARLA server` | CarlaUE4 is not running or blocked by firewall | Start CARLA (`./CarlaUE4.sh` or `CarlaUE4.exe`) and check `--host` and `--port` (default 2000). |
-| `Minimap overflows camera frame` | Minimap size exceeds small frame dimensions | The minimap automatically clamps to fit within the frame. You can also specify `--minimap-size 150` for smaller resolutions. |
-| `OpenCV window not displaying` | Headless environment or missing display | Remove `--no-display` or ensure GUI environment is available. Video recording via `--video out.mp4` works in headless mode. |
-| `Checkpoints out of sync` | Modified map version | Run `python generate_checkpoints.py --town Town03 --host localhost --port 2000` on the CARLA machine to refresh coordinates from the live map. |
+## Troubleshooting
 
+| Problem | What to check |
+|---|---|
+| CARLA connection timeout | Start the simulator; verify `--host`, `--port`, and firewall settings. |
+| CARLA Python API import failure | Install the wheel matching both the CARLA server and Python version. |
+| Fixed route fails outside Town03 | The current checkpoint route is Town03-specific; use `--no-navigation` in `live_demo.py` for other maps. |
+| Sensor frame timeout during collection | Reduce simulator load, check sensor/server compatibility, or increase `--sensor-timeout`. |
+| `train.py` cannot find data | Confirm `fusion_data/manifest.jsonl` and the referenced sensor files exist. |
+| Fusion demo cannot load checkpoint | Run `train.py` first and pass its output path to `--fusion-weights`. |
+| OpenCV window unavailable | Run with `--no-display` in `live_demo.py`; use `--video` if a recording is needed. |
+| Checkpoints no longer align with the map | Regenerate `config/checkpoints_town03.json` against the matching CARLA map version. |
