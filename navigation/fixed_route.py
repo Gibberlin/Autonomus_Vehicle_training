@@ -12,6 +12,7 @@ ROUTE_CHECKPOINT_IDS = (
     "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"
 )
 ROUTE_RESOLUTION_M = 2.0
+ROUTE_MAX_DISTANCE_M = 3000.0
 MODEL_STEER_WEIGHT = 0.25
 
 
@@ -23,6 +24,7 @@ def build_route_from_locations(planner, start_location, destinations):
     previous_location = None
     previous_label = f"spawn {ROUTE_START_SPAWN_INDEX}"
     current_location = start_location
+    route_limit_reached = False
 
     for destination_label, destination in destinations:
         try:
@@ -42,10 +44,15 @@ def build_route_from_locations(planner, start_location, destinations):
                 step_distance = previous_location.distance(location)
                 if step_distance < 0.05:
                     continue
+                if route_distance + step_distance > ROUTE_MAX_DISTANCE_M:
+                    route_limit_reached = True
+                    break
                 route_distance += step_distance
             route.append((waypoint, road_option))
             previous_location = location
 
+        if route_limit_reached or route_distance >= ROUTE_MAX_DISTANCE_M:
+            break
         current_location = destination
         previous_label = destination_label
 
@@ -101,6 +108,20 @@ def build_fixed_route(world_map, checkpoints_path=None):
         planner, spawn_points[ROUTE_START_SPAWN_INDEX].location, destinations
     )
     return route, route_distance, planner, spawn_points
+
+
+def build_navigation_agent(vehicle, world_map, planner, route, target_speed):
+    from agents.navigation.basic_agent import BasicAgent
+
+    agent = BasicAgent(
+        vehicle,
+        target_speed=target_speed,
+        opt_dict={"sampling_resolution": ROUTE_RESOLUTION_M},
+        map_inst=world_map,
+        grp_inst=planner,
+    )
+    agent.set_global_plan(route, stop_waypoint_creation=True)
+    return agent
 
 
 def blend_model_and_navigation_steering(model_steer, navigation_steer):

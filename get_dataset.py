@@ -536,11 +536,33 @@ def main():
     # Step 3: Load requested map
     current_map = client.get_world().get_map().name
     target_town = args.town
+    if target_town:
+        # Match against available CARLA maps (resolves e.g. "Town10" -> "Town10HD" or "Town10HD_Opt")
+        try:
+            available_maps = client.get_available_maps()
+            target_clean = target_town.strip().casefold()
+            matched_map = None
+            for m in available_maps:
+                short = m.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+                if short.casefold() == target_clean:
+                    matched_map = short
+                    break
+            if not matched_map:
+                for m in available_maps:
+                    short = m.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+                    if short.casefold().startswith(target_clean) or target_clean in short.casefold():
+                        matched_map = short
+                        break
+            if matched_map:
+                target_town = matched_map
+        except Exception:
+            pass
+
     if target_town and not current_map.endswith(target_town):
         print(f"[Map] Switching map from {current_map} to {target_town}...")
         world = client.load_world(target_town)
     else:
-        print(f"[Map] Using current map: {current_map}")
+        print(f"[Map] Using map: {current_map}")
         world = client.get_world()
 
     # Step 4: Execute requested dataset capture mode

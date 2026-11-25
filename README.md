@@ -54,25 +54,27 @@ The standard RPC port is `2000`; Traffic Manager defaults to port `8000`.
 
 ### Live demo
 
-Navigation is enabled by default and uses the fixed Town03 route. The demo starts
-in CARLA autopilot mode; press `m` to hand control to the project model, `a` to
-return to autopilot, and `q` or `Esc` to quit.
+Navigation is disabled by default. When enabled, it uses the fixed Town03 route
+capped at 3,000 m. The demo starts in CARLA autopilot mode; press `m` to hand
+control to the project model, `a` to return to autopilot, and `q` or `Esc` to
+quit.
 
 ```powershell
-# Start in autopilot; navigate Town03 and show the minimap
-python live_demo.py --town Town03 --minimap
+# Start in autopilot with navigation enabled and show the minimap
+python live_demo.py --town Town03 --navigation --minimap
 
 # Start with the project model, no NPCs or YOLO, for a short run
 python live_demo.py --start-model --vehicles 0 --no-yolo --max-seconds 120
 
-# Disable the fixed-route navigation behavior
+# Navigation is enabled only when explicitly requested
 python live_demo.py --no-navigation
 ```
 
-`--start-model` starts with the model rather than autopilot. `--navigation` and
-`--no-navigation` explicitly enable or disable navigation. Navigation currently
-supports Town03 and uses spawn point 0 plus the checkpoints in
-`config/checkpoints_town03.json`. Navigation contributes 75% of hybrid steering;
+`--start-model` starts with the model rather than autopilot. `--navigation`
+enables the fixed route; `--no-navigation` explicitly disables it. Navigation
+currently supports Town03, uses spawn point 0 plus the checkpoints in
+`config/checkpoints_town03.json`, and stops at a maximum planned distance of
+3,000 m. Navigation contributes 75% of hybrid steering;
 the model contributes 25%. Navigation provides route speed and hazard braking.
 The live demo also applies a full-brake safety stop when a CARLA vehicle or
 pedestrian comes within 5 m of the ego vehicle's bounding box; it resumes normal
@@ -222,9 +224,10 @@ command above before enabling fusion in a demo.
 
 ## Navigation and minimap
 
-The fixed route starts at Town03 spawn point 0 and visits P1–P10 from
-`config/checkpoints_town03.json`. The minimap uses a road cache for the active
-map; if a cache is missing, the live demo can build it from CARLA's map.
+The fixed route starts at Town03 spawn point 0 and follows checkpoints P1–P10
+from `config/checkpoints_town03.json`, stopping at 3,000 m if the full route is
+longer. The minimap uses a road cache for the active map; if a cache is missing,
+the live demo can build it from CARLA's map.
 
 ```powershell
 # Refresh the active map's road cache while running the demo

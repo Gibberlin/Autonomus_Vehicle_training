@@ -15,10 +15,10 @@ import numpy as np
 from navigation.fixed_route import (
     MODEL_STEER_WEIGHT,
     ROUTE_CHECKPOINT_IDS,
-    ROUTE_RESOLUTION_M,
     ROUTE_START_SPAWN_INDEX,
     ROUTE_TOWN,
     blend_model_and_navigation_steering,
+    build_navigation_agent,
     build_fixed_route,
 )
 
@@ -129,8 +129,8 @@ def parse_args():
     parser.add_argument(
         "--navigation",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="use the fixed Town03 spawn/checkpoint route with navigation-assisted model steering (default: enabled)",
+        default=False,
+        help="use the fixed Town03 route (maximum 3000 m) with navigation-assisted model steering (default: disabled)",
     )
     parser.add_argument("--minimap", action="store_true", help="enable Town03 road minimap overlay")
     parser.add_argument("--minimap-position", choices=("top-right", "top-left"), default="top-right",
@@ -434,17 +434,12 @@ def main():
         ego.set_autopilot(state["auto"], tm.get_port())
 
         if args.navigation:
-            from agents.navigation.basic_agent import BasicAgent
-
-            navigation_agent = BasicAgent(
+            navigation_agent = build_navigation_agent(
                 ego,
-                target_speed=args.target_speed,
-                opt_dict={"sampling_resolution": ROUTE_RESOLUTION_M},
-                map_inst=world.get_map(),
-                grp_inst=route_planner,
-            )
-            navigation_agent.set_global_plan(
-                navigation_route, stop_waypoint_creation=True
+                world.get_map(),
+                route_planner,
+                navigation_route,
+                args.target_speed,
             )
 
         vehicle_bps = [

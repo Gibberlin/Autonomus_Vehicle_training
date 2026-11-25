@@ -10,10 +10,10 @@ from datetime import datetime
 from navigation.fixed_route import (
     MODEL_STEER_WEIGHT,
     ROUTE_CHECKPOINT_IDS,
-    ROUTE_RESOLUTION_M,
     ROUTE_START_SPAWN_INDEX,
     ROUTE_TOWN,
     blend_model_and_navigation_steering,
+    build_navigation_agent,
     build_fixed_route,
 )
 
@@ -158,7 +158,6 @@ def main():
                 build_runtime_state,
             )
             from fused_carla_sensors import FusionSensorRig
-            from agents.navigation.basic_agent import BasicAgent
             from live_demo import YoloWorker, draw_distance_guide, find_lead
         except ImportError as exc:
             raise RuntimeError(
@@ -226,14 +225,13 @@ def main():
                 actors.append(npc)
         print(f"[traffic] spawned {len(actors) - 1} of {args.vehicles} requested NPC vehicles")
 
-        agent = BasicAgent(
+        agent = build_navigation_agent(
             ego,
-            target_speed=args.target_speed,
-            opt_dict={"sampling_resolution": ROUTE_RESOLUTION_M},
-            map_inst=world.get_map(),
-            grp_inst=global_planner,
+            world.get_map(),
+            global_planner,
+            route,
+            args.target_speed,
         )
-        agent.set_global_plan(route, stop_waypoint_creation=True)
 
         camera_queue = queue.Queue(maxsize=1)
         camera_blueprint = blueprints.find("sensor.camera.rgb")

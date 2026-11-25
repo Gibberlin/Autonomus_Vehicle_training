@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from navigation.fixed_route import (
+    ROUTE_MAX_DISTANCE_M,
     blend_model_and_navigation_steering,
     build_route_from_locations,
 )
@@ -63,6 +64,31 @@ class TestModelNavigation(unittest.TestCase):
                 [("P1", FakeLocation(3, 4))],
             )
 
+    def test_route_is_truncated_at_maximum_distance(self):
+        class LongRoutePlanner:
+            def trace_route(self, start, destination):
+                locations = [
+                    start,
+                    FakeLocation(1000, 0),
+                    FakeLocation(2000, 0),
+                    FakeLocation(3000, 0),
+                    FakeLocation(4000, 0),
+                ]
+                return [
+                    (SimpleNamespace(transform=SimpleNamespace(location=location)), "road")
+                    for location in locations
+                ]
+
+        route, distance = build_route_from_locations(
+            LongRoutePlanner(),
+            FakeLocation(0, 0),
+            [("P1", FakeLocation(4000, 0))],
+        )
+
+        self.assertEqual(distance, ROUTE_MAX_DISTANCE_M)
+        self.assertEqual(len(route), 4)
+        self.assertEqual(route[-1][0].transform.location.x, ROUTE_MAX_DISTANCE_M)
+
     def test_navigation_has_primary_steering_weight(self):
         self.assertAlmostEqual(
             blend_model_and_navigation_steering(1.0, -1.0),
@@ -74,6 +100,12 @@ class TestModelNavigation(unittest.TestCase):
         )
 
     def test_live_demo_accepts_navigation_option(self):
+        with patch("sys.argv", ["live_demo.py", "--start-model"]):
+            args = parse_args()
+
+        self.assertFalse(args.navigation)
+        self.assertFalse(args.start_autopilot)
+
         with patch("sys.argv", ["live_demo.py", "--navigation", "--start-model"]):
             args = parse_args()
 
