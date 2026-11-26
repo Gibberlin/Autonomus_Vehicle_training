@@ -119,8 +119,24 @@ def build_carla_sensor_features(ego, boxes=None, classes=None):
     angular = ego.get_angular_velocity()
     yaw_rate = float(np.deg2rad(angular.z))
     curvature = yaw_rate / forward_speed if abs(forward_speed) > 0.5 else 0.0
-    heading = (float(transform.rotation.yaw) + 180.0) % 360.0 - 180.0
-    heading = (heading + 360.0) % 360.0
+
+    # Relative road heading error in [-15, 15] deg.
+    # The training dataset has heading_deg with mean -0.25 deg and std 1.39 deg.
+    # Using raw compass yaw [0, 360) causes an extreme 30-130 sigma out-of-distribution
+    # input that saturates the model output to -1.0 steer, causing an infinite right-circling loop.
+    heading = 0.0
+    try:
+        world = ego.get_world()
+        carla_map = world.get_map()
+        wp = carla_map.get_waypoint(transform.location, project_to_road=True)
+        if wp is not None:
+            road_yaw = float(wp.transform.rotation.yaw)
+            ego_yaw = float(transform.rotation.yaw)
+            rel_yaw = (ego_yaw - road_yaw + 180.0) % 360.0 - 180.0
+            heading = float(np.clip(rel_yaw, -15.0, 15.0))
+    except Exception:
+        heading = 0.0
+
     counts = detection_counts(boxes, classes)
 
     values = {

@@ -54,12 +54,15 @@ def create_latest_update_page():
     # Left Column Header & Bullets
     ax.text(0.06, 0.820, "1. LATERAL STEERING BIAS ELIMINATED", fontsize=8.5, fontweight="bold", color="#142d55")
     s1_text = (
-        "• Root Cause: 975 right vs 348 left turns (2.8x skew) in raw data pushed head.bias to +0.177.\n"
-        "• Symmetric Augmentation: Exact horizontal mirroring (x -> flip(x), y -> -y) doubled data to\n"
-        "  8,346 frames with exact 1:1 balance (1,755 left/right; mean steer = 0.000000).\n"
-        "• Anti-Bias Inference: 0.5*(f(x) - f(flip(x))) deployed in demos; cancels residual offsets."
+        "• Root Cause: 975 right vs 348 left turns (2.8x skew)\n"
+        "  in raw data pushed head.bias to +0.177.\n"
+        "• Symmetric Augmentation: Exact mirroring (x -> flip(x),\n"
+        "  y -> -y) doubled data to 8,346 frames with exact\n"
+        "  1:1 balance (1,755 left/right; mean steer = 0.0000).\n"
+        "• Anti-Bias Inference: 0.5*(f(x) - f(flip(x))) deployed\n"
+        "  in demos; cancels residual offsets."
     )
-    ax.text(0.06, 0.806, s1_text, fontsize=6.8, color="#333333", va="top", linespacing=1.25)
+    ax.text(0.06, 0.806, s1_text, fontsize=6.5, color="#333333", va="top", linespacing=1.22)
 
     # Embed Figure 14 (Steering bias chart)
     fig14_path = os.path.join("report", "figures", "figure_14_steering_bias_fix.png")
@@ -68,28 +71,30 @@ def create_latest_update_page():
         ax.imshow(im14, extent=[0.06, 0.485, 0.585, 0.725], aspect="auto", zorder=2)
 
     # Bias Comparison Mini-Table
-    table_card = patches.FancyBboxPatch((0.06, 0.470), 0.425, 0.105, boxstyle="round,pad=0.008", fc="#f8fafc", ec="#cbd5e1", lw=0.8)
+    table_card = patches.FancyBboxPatch((0.06, 0.468), 0.425, 0.108, boxstyle="round,pad=0.008", fc="#f8fafc", ec="#cbd5e1", lw=0.8)
     ax.add_patch(table_card)
-    ax.text(0.07, 0.563, "Validation Split (n=248) | Old vs New Model Comparison", fontsize=7.0, fontweight="bold", color="#142d55")
+    ax.text(0.07, 0.563, "Validation Split (n=248) | Old vs New Model", fontsize=6.5, fontweight="bold", color="#142d55")
     table_text = (
-        "Metric                         Old Model (Raw)    New Model (Raw)    New Model (Symmetric)\n"
-        "------------------------------------------------------------------------------------------\n"
-        "Net Steering Bias             +0.0613 (Right)     +0.0042 (-93%)     -0.0005 (-99.2%)\n"
-        "Right Turns (> +0.02)         151 frames          73 frames          59 frames\n"
-        "Left Turns (< -0.02)          20 frames           88 frames          95 frames (Balanced)\n"
-        "Straight Frames               77 frames           87 frames          94 frames"
+        "Metric             Old (Raw)    New (Raw)    New (Sym)\n"
+        "------------------------------------------------------\n"
+        "Net Steering Bias  +0.0613      +0.0042      -0.0005\n"
+        "Right Turns (>0.02)151 frames   73 frames    59 frames\n"
+        "Left Turns (<-0.02) 20 frames   88 frames    95 frames (Bal)\n"
+        "Straight Frames     77 frames   87 frames    94 frames"
     )
-    ax.text(0.07, 0.550, table_text, fontsize=5.8, family="monospace", color="#1e293b", va="top", linespacing=1.2)
+    ax.text(0.07, 0.548, table_text, fontsize=4.9, family="monospace", color="#1e293b", va="top", linespacing=1.22)
 
     # Right Column Header & Bullets
     ax.text(0.515, 0.820, "2. TELEMETRY: SMOOTH STEER VS OBSTACLE COLLISION", fontsize=8.5, fontweight="bold", color="#142d55")
     s2_text = (
-        "• Smooth Lateral Control: Run 20261119_192151 achieved 159.5 seconds and 763.0 meters\n"
-        "  continuous model driving across avenues with near-zero lane boundary invasions.\n"
-        "• Obstacle Collision Mechanism: Logged 155 collision ticks pushing into stopped vehicles.\n"
-        "  PilotNet only controls steering (Image -> Steer); speed control is completely decoupled."
+        "• Smooth Lateral Control: Run 20261119_192151 achieved\n"
+        "  159.5 s and 763.0 m continuous model driving across\n"
+        "  avenues with near-zero lane boundary invasions.\n"
+        "• Obstacle Collision Mechanism: Logged 155 collision\n"
+        "  ticks pushing into stopped vehicles. PilotNet only\n"
+        "  controls steer; speed control is completely decoupled."
     )
-    ax.text(0.515, 0.806, s2_text, fontsize=6.8, color="#333333", va="top", linespacing=1.25)
+    ax.text(0.515, 0.806, s2_text, fontsize=6.5, color="#333333", va="top", linespacing=1.22)
 
     # Embed Figure 15 (Telemetry timeline)
     fig15_path = os.path.join("report", "figures", "figure_15_driving_telemetry_limitation.png")
@@ -98,17 +103,18 @@ def create_latest_update_page():
         ax.imshow(im15, extent=[0.515, 0.94, 0.585, 0.725], aspect="auto", zorder=2)
 
     # Telemetry explanation box
-    tel_card = patches.FancyBboxPatch((0.515, 0.470), 0.425, 0.105, boxstyle="round,pad=0.008", fc="#fff7ed", ec="#fdba74", lw=0.8)
+    tel_card = patches.FancyBboxPatch((0.515, 0.468), 0.425, 0.108, boxstyle="round,pad=0.008", fc="#fff7ed", ec="#fdba74", lw=0.8)
     ax.add_patch(tel_card)
-    ax.text(0.525, 0.563, "Root Cause of Obstacle Pushing in Model Mode", fontsize=7.0, fontweight="bold", color="#c2410c")
+    ax.text(0.525, 0.563, "Root Cause of Obstacle Pushing in Model Mode", fontsize=6.5, fontweight="bold", color="#c2410c")
     tel_desc = (
-        "In live_demo.py (lines 551-554), throttle is calculated strictly as:\n"
+        "In live_demo.py, throttle is calculated strictly as:\n"
         "    throttle = clip((target_speed - speed) * 0.04, 0.0, 0.5)\n"
-        "When an obstacle halts the vehicle, speed drops to 0 km/h. Because\n"
-        "speed < target (25 km/h), controller continuously outputs max throttle (0.50),\n"
-        "causing repeated collisions instead of braking or re-routing."
+        "When an obstacle halts the vehicle, speed drops to 0 km/h.\n"
+        "Because speed < target (25 km/h), controller continuously\n"
+        "outputs max throttle, causing repeated collisions\n"
+        "instead of braking or safely stopping."
     )
-    ax.text(0.525, 0.550, tel_desc, fontsize=5.8, color="#7c2d12", va="top", linespacing=1.2)
+    ax.text(0.525, 0.548, tel_desc, fontsize=5.0, color="#7c2d12", va="top", linespacing=1.22)
 
     # -------------------------------------------------------------------------
     # SECTION 3: NEXT-GEN PATHFINDER & OBSTACLE REDIRECTION (Y: 0.450 to 0.070)
@@ -163,8 +169,9 @@ def create_latest_update_page():
 
     out_pdf = "latest_update_page.pdf"
     fig.savefig(out_pdf, format="pdf", dpi=DPI, bbox_inches=None)
+    fig.savefig(os.path.join("report", "page_02_preview.png"), dpi=150, bbox_inches=None)
     plt.close(fig)
-    print(f"Generated {out_pdf}")
+    print(f"Generated {out_pdf} and report/page_02_preview.png")
     return out_pdf
 
 def merge_reports(new_page_pdf, previous_pdf, output_pdf):
@@ -178,12 +185,15 @@ def merge_reports(new_page_pdf, previous_pdf, output_pdf):
 
     # 2. Add all older findings from previous report (pushed down)
     old_reader = pypdf.PdfReader(previous_pdf)
-    # The previous report might have had 6 pages (starting from page 1: Nov 19 update, page 2: Nov 16 update, etc.)
-    # When we prepend, page 1 is Nov 21, page 2 is Nov 19, pages 3-7 are Nov 16.
-    # If previous_pdf already has an older version of the Nov 21 page, we take from Nov 19 page onwards.
+    # Target 7 pages total:
+    # Page 1: Nov 21 Update (latest active milestone: steering bias fix, obstacle telemetry, architecture)
+    # Page 2: Nov 19 Update (fixed route navigation)
+    # Pages 3-7: Original report pages (figures 1-13, benchmark tables)
     start_idx = 0
-    if len(old_reader.pages) == 7: # if previous run already had 7 pages
-        start_idx = 1 # skip previous attempt of page 1
+    if len(old_reader.pages) >= 8:
+        start_idx = 2  # skip temporary 26 Nov page and older 21 Nov page
+    elif len(old_reader.pages) == 7:
+        start_idx = 1  # skip older 21 Nov page
     
     for i in range(start_idx, len(old_reader.pages)):
         writer.add_page(old_reader.pages[i])

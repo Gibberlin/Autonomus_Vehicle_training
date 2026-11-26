@@ -114,6 +114,10 @@ COLOR_VEHICLE = (0, 235, 0)           # Bright green
 COLOR_VEHICLE_BORDER = (0, 60, 0)     # Dark green outline
 COLOR_TEXT = (255, 255, 255)          # White
 COLOR_LEGEND_BG = (20, 20, 20)        # Legend banner
+COLOR_ROUTE = (0, 235, 255)           # High-contrast bright cyan for active route
+COLOR_ROUTE_OUTLINE = (20, 30, 40)    # Dark contrast casing
+COLOR_ROUTE_COMPLETED = (130, 110, 80)# Muted line for already traversed road
+COLOR_ROUTE_STATUS = (0, 255, 200)    # Soft bright status indicator
 
 
 class Minimap:
@@ -174,10 +178,74 @@ class Minimap:
         # 2. Compute coordinate transformation parameters
         self._compute_transform_parameters()
 
-        # 3. Render the static base image (background, roads, markers, and legend)
+        # 3. Dynamic navigation route and progress state
+        self.route_points: List[Tuple[float, float]] = []
+        self.route_pixel_pts: List[Tuple[int, int]] = []
+        self.route_distance_m: Optional[float] = None
+        self.remaining_distance_m: Optional[float] = None
+        self.current_route_index: int = 0
+        self.navigation_status: str = "IDLE"
+
+        # 4. Render the static base image (background, roads, markers, and legend)
         self.base_image: Optional[np.ndarray] = None
         if np is not None and cv2 is not None:
             self._render_static_base()
+
+    def set_route(
+        self,
+        route_points: List[Tuple[float, float]],
+        route_distance_m: Optional[float] = None,
+    ) -> None:
+        """Sets the active navigation route waypoints in world coordinates.
+
+        Renders cleanly on top of the road network and beneath the vehicle/markers.
+        """
+        self.route_points = list(route_points)
+        self.route_pixel_pts = [self.world_to_pixel(pt[0], pt[1]) for pt in self.route_points]
+        self.route_distance_m = float(route_distance_m) if route_distance_m is not None else None
+        self.remaining_distance_m = self.route_distance_m
+        self.current_route_index = 0
+        self.navigation_status = "FOLLOWING" if self.route_points else "IDLE"
+
+    def clear_route(self) -> None:
+        """Clears the active navigation route."""
+        self.route_points = []
+        self.route_pixel_pts = []
+        self.route_distance_m = None
+        self.remaining_distance_m = None
+        self.current_route_index = 0
+        self.navigation_status = "IDLE"
+
+    def set_destination(self, dest_x: float, dest_y: float) -> None:
+        """Updates the destination marker and re-renders the base background."""
+        self.destination_location = (float(dest_x), float(dest_y))
+        if np is not None and cv2 is not None:
+            self._render_static_base()
+
+    def update_progress(
+        self,
+        current_x: float,
+        current_y: float,
+        remaining_distance_m: Optional[float] = None,
+        status: str = "FOLLOWING",
+    ) -> None:
+        """Updates the vehicle's progress along the route and current navigation status."""
+        self.navigation_status = status
+        if remaining_distance_m is not None:
+            self.remaining_distance_m = float(remaining_distance_m)
+        if self.route_points:
+            # Local window search around current index to advance progress along the route
+            search_start = max(0, self.current_route_index - 3)
+            search_end = min(len(self.route_points), self.current_route_index + 25)
+            best_idx = self.current_route_index
+            min_dist_sq = float("inf")
+            for idx in range(search_start, search_end):
+                pt = self.route_points[idx]
+                d_sq = (pt[0] - current_x) ** 2 + (pt[1] - current_y) ** 2
+                if d_sq < min_dist_sq:
+                    min_dist_sq = d_sq
+                    best_idx = idx
+            self.current_route_index = max(self.current_route_index, best_idx)
 
     def _extract_from_carla_map(self, carla_map: Any, step_m: float = 2.0) -> None:
         """Extract road polylines from the selected CARLA map and cache them."""
@@ -424,17 +492,52 @@ class Minimap:
         self.base_image = base
 
     def render(self, vehicle_x: float, vehicle_y: float, vehicle_yaw: float) -> Optional[np.ndarray]:
-        """Renders the minimap with the dynamic ego vehicle marker.
+        """Renders the minimap with the planned route line and dynamic ego vehicle marker.
 
-        Extremely fast per-frame operation: copies pre-rendered static base image
-        and draws only the vehicle directional arrow.
+        Extremely fast per-frame operation: copies pre-rendered static base image,
+        draws the route polyline beneath markers, and renders the vehicle directional arrow.
         """
         if self.base_image is None or np is None or cv2 is None:
             return None
 
         img = self.base_image.copy()
 
-        # Convert vehicle position to pixel
+        # 1. Draw planned route polyline beneath markers and vehicle
+        if len(self.route_pixel_pts) >= 2:
+            idx = min(self.current_route_index, len(self.route_pixel_pts) - 1)
+            # Completed portion of the route (muted)
+            if idx > 1:
+                pts_done = np.array(self.route_pixel_pts[:idx + 1], dtype=np.int32).reshape((-1, 1, 2))
+                cv2.polylines(img, [pts_done], isClosed=False, color=COLOR_ROUTE_COMPLETED, thickness=2, lineType=cv2.LINE_AA)
+            # Remaining portion of the route (high-contrast cyan with dark casing)
+            pts_rem = np.array(self.route_pixel_pts[idx:], dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(img, [pts_rem], isClosed=False, color=COLOR_ROUTE_OUTLINE, thickness=4, lineType=cv2.LINE_AA)
+            cv2.polylines(img, [pts_rem], isClosed=False, color=COLOR_ROUTE, thickness=2, lineType=cv2.LINE_AA)
+
+            # Ensure Destination and Start markers remain crisp on top of the route line
+            marker_radius = max(3, int(round(self.size * 0.016)))
+            px_dst, py_dst = self.world_to_pixel(*self.destination_location)
+            cv2.circle(img, (px_dst, py_dst), marker_radius + 1, COLOR_MARKER_BORDER, -1, lineType=cv2.LINE_AA)
+            cv2.circle(img, (px_dst, py_dst), marker_radius, COLOR_DESTINATION, -1, lineType=cv2.LINE_AA)
+
+        # 2. Navigation status overlay
+        if self.navigation_status != "IDLE":
+            status_text = self.navigation_status
+            if self.remaining_distance_m is not None:
+                status_text += f" {self.remaining_distance_m:.0f}m"
+            font_scale = max(0.24, self.size * 0.001)
+            cv2.putText(
+                img,
+                status_text,
+                (self.padding, self.padding + 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                COLOR_ROUTE_STATUS,
+                1,
+                lineType=cv2.LINE_AA,
+            )
+
+        # 3. Convert vehicle position to pixel
         px, py = self.world_to_pixel(vehicle_x, vehicle_y)
 
         # Convert vehicle yaw to direction vector

@@ -38,13 +38,14 @@ and a CARLA simulator distribution.
 
 ### Demos and navigation
 
-- `live_demo.py` - Main CARLA driving demo; includes route navigation and
-  optional YOLO detection and fusion-model sensors.
+- `live_demo.py` - Main CARLA driving demo; features model-based autonomous
+  driving, CARLA autopilot, obstacle safety stops, and optional YOLO/fusion sensors.
 - `our_model_demo.py` - Fixed Town03 route demo using the steering controller.
 - `generate_checkpoints.py` - Generate route checkpoints from a CARLA map.
 - `verify_carla_minimap.py` - Check CARLA/map connectivity and minimap setup.
 - `smoke_test.py` - Basic CARLA connection and camera smoke test.
-- `navigation/` - Route assembly, checkpoint handling, and fixed-route logic.
+- `navigation/` - Road router (`router.py`), path follower (`route_follower.py`),
+  checkpoint handling (`checkpoints.py`), and fixed-route logic (`fixed_route.py`).
 - `config/` - Town03 route checkpoints and cached road geometry for minimaps.
 - `visualization/` - Minimap drawing and related visualization helpers.
 
@@ -52,6 +53,7 @@ and a CARLA simulator distribution.
 
 - `collect_data.py` - Synchronized multimodal capture: RGB, depth, semantic
   segmentation, LiDAR, radar, vehicle state, and control labels.
+- `run_collection.py` - Batch data collection runner across multiple CARLA maps.
 - `get_dataset.py` - Legacy center/left/right RGB capture for PilotNet training.
 - `record_drive.py` - Older three-camera RGB driving-data recorder; writes to
   `drive_data/`.
@@ -86,7 +88,6 @@ and a CARLA simulator distribution.
 
 ### Utilities and project metadata
 
-- `render_clip.py`, `record_clip.py` - Clip capture and rendering utilities.
 - `requirements.txt` - Main Python dependencies.
 - `Dockerfile` - Container build configuration.
 - `.gitignore` - Excludes local environments, datasets, caches, and generated
@@ -115,9 +116,9 @@ and a CARLA simulator distribution.
 - `frames/` and `clip_frames/` - Local image collections used by detection and
   clip-processing tools.
 - `results/` and `report/` - Generated model/demo outputs and report figures.
-- `scripts/` - Utilities for map-cache generation, offline minimap rendering,
-  and report generation.
-- `tests/` - Offline tests for navigation, minimaps, and the fusion model.
+- `scripts/` - Utilities for map caching, offline rendering, figure generation,
+  and progress report generation (`update_progress_report.py`, `generate_clean_figures.py`).
+- `tests/` - Offline unit test suite covering router, follower, safety stops, and models.
 - `LocalMap/` - Guwahati OpenStreetMap/OpenDRIVE files and map loader.
 - `PythonAPI/`, `CarlaUE4/`, `Engine/`, `Co-Simulation/`, and `HDMaps/` - CARLA
   simulator distribution components, rather than application model code.

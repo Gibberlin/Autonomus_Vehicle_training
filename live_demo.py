@@ -147,6 +147,8 @@ def parse_args():
                         help="manual steering bias offset trim to subtract from model output")
     parser.add_argument("--symmetric", action=argparse.BooleanOptionalAction, default=True,
                         help="enable anti-bias symmetric inference 0.5 * (f(x) - f(flip(x))) (default: enabled)")
+    parser.add_argument("--destination", nargs=2, type=float, default=None, metavar=("X", "Y"),
+                        help="optional explicit destination world coordinates X Y (default: snaps to minimap destination)")
     return parser.parse_args()
 
 
@@ -214,6 +216,7 @@ def nearest_obstacle_distance(ego, actors):
         )
         if nearest is None or distance < nearest:
             nearest = distance
+
     return nearest
 
 
@@ -382,22 +385,9 @@ def main():
         client = carla.Client(args.host, args.port)
         client.set_timeout(30.0)
         if args.navigation:
-            if args.town and args.town.replace("\\", "/").rstrip("/").split("/")[-1].casefold() != "town03":
-                raise ValueError("--navigation only supports Town03")
-            world = client.get_world()
-            if not world.get_map().name.casefold().endswith("town03"):
-                world = client.load_world(ROUTE_TOWN)
-            navigation_route, planned_route_distance, route_planner, spawn_points = (
-                build_fixed_route(world.get_map(), args.checkpoints_config)
-            )
-            print(
-                f"[route] {ROUTE_TOWN}, spawn {ROUTE_START_SPAWN_INDEX} -> "
-                f"{' -> '.join(ROUTE_CHECKPOINT_IDS)}, "
-                f"{planned_route_distance:.0f} m, {len(navigation_route)} waypoints"
-            )
-        else:
-            world = client.load_world(args.town) if args.town else client.get_world()
-            spawn_points = world.get_map().get_spawn_points()
+            print("[navigation] Route navigation is disabled (limited to Town03; deferred until general multi-town navigation is ready). Running in direct driving mode.")
+        world = client.load_world(args.town) if args.town else client.get_world()
+        spawn_points = world.get_map().get_spawn_points()
         original_settings = world.get_settings()
         settings = world.get_settings()
         settings.synchronous_mode = True
@@ -407,6 +397,8 @@ def main():
         tm = client.get_trafficmanager(args.tm_port)
         tm.set_synchronous_mode(True)
         blueprints = world.get_blueprint_library()
+
+
         if not spawn_points:
             raise RuntimeError("The current CARLA map has no vehicle spawn points")
         if args.navigation:
@@ -481,6 +473,7 @@ def main():
         lane_sensor = world.spawn_actor(lane_bp, carla.Transform(), attach_to=ego)
         sensors.append(lane_sensor)
 
+
         def record_event(_event, stat_key, model_key):
             _ = _event
             with stats_lock:
@@ -543,13 +536,14 @@ def main():
             )
 
         print("[ready] CARLA live demo")
-        if args.navigation:
-            print(
-                f"[control] Navigation steering weight: "
-                f"{1.0 - MODEL_STEER_WEIGHT:.0%}; KITTI controller weight: "
-                f"{MODEL_STEER_WEIGHT:.0%}"
-            )
-        print("[keys] m: KITTI controller (+ nav when enabled) | a: autopilot | q / Esc: quit")
+        print("[keys] m: model driving | a: autopilot | q / Esc: quit")
+
+        # Navigation is turned off (limited to Town03; deferred until general multi-map navigation is ready)
+        router = None
+        route_follower = None
+        NavigationState = None
+        route_active = False
+
         while True:
             world_frame = world.tick()
             image = camera_queue.get(timeout=10.0)
@@ -584,6 +578,7 @@ def main():
             obstacle_actors = (
                 list(world_actors.filter("vehicle.*"))
                 + list(world_actors.filter("walker.pedestrian.*"))
+                + list(world_actors.filter("static.prop.*"))
             )
             obstacle_distance = nearest_obstacle_distance(ego, obstacle_actors)
             was_failsafe_active = failsafe_active
@@ -662,6 +657,38 @@ def main():
             else:
                 navigation_steer = None
 
+            # Autonomous road route following and progress tracking
+            route_steer = None
+            route_throttle = None
+            route_brake = None
+            if route_follower is not None and NavigationState is not None and route_follower.state != NavigationState.IDLE:
+                route_steer, route_throttle, route_brake, needs_replan = route_follower.step(
+                    location.x,
+                    location.y,
+                    ego.get_transform().rotation.yaw,
+                    speed,
+                    delta_s=args.fixed_delta,
+                    failsafe_blocked=failsafe_active,
+                )
+                if minimap is not None:
+                    minimap.update_progress(
+                        location.x,
+                        location.y,
+                        remaining_distance_m=route_follower.remaining_distance_m,
+                        status=route_follower.state.value,
+                    )
+                if needs_replan and router is not None and route_follower.destination is not None:
+                    replan_result = router.plan_route(
+                        (location.x, location.y),
+                        route_follower.destination,
+                        origin_heading=ego.get_transform().rotation.yaw,
+                    )
+                    if replan_result.success:
+                        route_follower.set_route(replan_result)
+                        if minimap is not None:
+                            minimap.set_route(replan_result.polyline_2d, replan_result.total_distance_m)
+                        print(f"[route] Replanned route: {replan_result.total_distance_m:.1f} m remaining")
+
             if state["auto"]:
                 control = ego.get_control()
                 steer_autopilot = float(control.steer)
@@ -674,6 +701,10 @@ def main():
                     )
                     throttle = float(navigation_control.throttle)
                     brake = float(navigation_control.brake)
+                elif route_active and route_steer is not None:
+                    steer_command = route_steer
+                    throttle = route_throttle
+                    brake = route_brake
                 else:
                     if fusion_control is not None:
                         throttle = fusion_control["throttle"]
@@ -818,6 +849,19 @@ def main():
                     (0, 255, 255),
                     1,
                 )
+            elif route_follower is not None and NavigationState is not None and route_follower.state != NavigationState.IDLE:
+                nav_msg = f"Route: {route_follower.state.value}"
+                if route_follower.remaining_distance_m is not None:
+                    nav_msg += f" | Rem: {route_follower.remaining_distance_m:.0f}m"
+                cv2.putText(
+                    display,
+                    nav_msg,
+                    (8, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (0, 235, 255),
+                    1,
+                )
             if minimap is not None:
                 ego_tf = ego.get_transform()
                 display = minimap.overlay_on_frame(
@@ -834,17 +878,40 @@ def main():
             key = cv2.waitKey(1) & 0xFF if not args.no_display else 255
             if key in (27, ord("q")) or (args.max_seconds and sim_time_run >= args.max_seconds):
                 break
-            if key == ord("m") and state["auto"]:
-                ego.set_autopilot(False)
+            if key == ord("d"):
+                if router is not None and minimap is not None and route_follower is not None:
+                    try:
+                        all_road_pts = [pt for seg in minimap.roads for pt in seg]
+                        new_dest = random.choice(all_road_pts)
+                        minimap.set_destination(new_dest[0], new_dest[1])
+                        new_plan = router.plan_route(
+                            (location.x, location.y),
+                            new_dest,
+                            origin_heading=ego.get_transform().rotation.yaw,
+                        )
+                        if new_plan.success:
+                            minimap.set_route(new_plan.polyline_2d, new_plan.total_distance_m)
+                            route_follower.set_route(new_plan)
+                            route_active = True
+                            state["auto"] = False
+                            ego.set_autopilot(False)
+                            print(f"[destination] Selected new destination ({new_dest[0]:.1f}, {new_dest[1]:.1f}): {new_plan.total_distance_m:.1f} m")
+                    except Exception as exc:
+                        print(f"[destination] Could not update destination: {exc}")
+            elif key == ord("m"):
+                if state["auto"]:
+                    ego.set_autopilot(False)
                 if not failsafe_active:
                     ego.apply_control(carla.VehicleControl(
                         throttle=0.0, steer=0.0, brake=0.0
                     ))
                 state["auto"] = False
+                route_active = False
                 steer_previous = 0.0
                 print("[mode] KITTI controller now has control")
             elif key == ord("a") and not state["auto"]:
                 state["auto"] = True
+                route_active = False
                 if failsafe_active:
                     print(
                         "[mode] CARLA autopilot will resume after the safety stop"
@@ -855,6 +922,9 @@ def main():
                     ))
                     ego.set_autopilot(True, tm.get_port())
                     print("[mode] CARLA autopilot now has control")
+            if route_active and route_follower is not None and NavigationState is not None and route_follower.state == NavigationState.ARRIVED:
+                if not state["auto"]:
+                    ego.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
             if navigation_agent is not None and not state["auto"] and navigation_agent.done():
                 print("[finish] Fixed checkpoint route reached")
                 break
