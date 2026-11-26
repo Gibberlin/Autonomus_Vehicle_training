@@ -1,11 +1,12 @@
 """Update progress.pdf by prepending the latest implementation updates.
 
-Generates:
+Generates a 9-page comprehensive publication report:
 - Page 1: 26 November 2026 Milestone Update (Autonomous Route Following, Minimap Path Tracing & Safety Integration)
-- Page 2: 21 November 2026 Milestone Update (Steering Bias Fix & Obstacle Pushing Diagnosis)
-- Page 3: 19 November 2026 Update (Fixed-Route Navigation)
-- Pages 4-8: Comprehensive baseline and model report (Figures 1-13, benchmarks)
-Total: 8 pages.
+- Page 2: Core Concept Deep Dive: What Actually Are We Teaching the Steer Model?
+- Page 3: 21 November 2026 Milestone Update (Steering Bias Fix & Obstacle Pushing Diagnosis)
+- Page 4: 19 November 2026 Update (Fixed-Route Navigation Architecture)
+- Pages 5-9: Comprehensive baseline and model report (Figures 1-13, benchmarks)
+Total: 9 pages.
 """
 
 import os
@@ -61,7 +62,6 @@ def create_26nov_milestone_page():
     fig17_path = os.path.join("report", "figures", "figure_17_autonomous_navigation_pipeline.png")
     if os.path.isfile(fig17_path):
         im17 = Image.open(fig17_path)
-        # Aspect ratio 2.417:1 -> height = 0.88 * 8.27 / 2.417 / 11.69 = 0.2576
         y_top_17 = 0.802
         y_bot_17 = y_top_17 - 0.2576
         ax.imshow(im17, extent=[0.06, 0.94, y_bot_17, y_top_17], aspect="auto", zorder=2)
@@ -75,7 +75,6 @@ def create_26nov_milestone_page():
     fig18_path = os.path.join("report", "figures", "figure_18_navigation_tracking_and_safety.png")
     if os.path.isfile(fig18_path):
         im18 = Image.open(fig18_path)
-        # Aspect ratio 2.586:1 -> height = 0.88 * 8.27 / 2.586 / 11.69 = 0.2407
         y_top_18 = 0.514
         y_bot_18 = y_top_18 - 0.2407
         ax.imshow(im18, extent=[0.06, 0.94, y_bot_18, y_top_18], aspect="auto", zorder=2)
@@ -114,13 +113,187 @@ def create_26nov_milestone_page():
     ax.plot([0.06, 0.94], [0.060, 0.060], color="#cbd5e1", lw=0.6)
     footer_text = "Modules: navigation/router.py; navigation/route_follower.py; visualization/minimap.py; live_demo.py; tests/test_router_and_follower.py."
     ax.text(0.06, 0.044, footer_text, fontsize=6.2, color="#64748b")
-    ax.text(0.94, 0.044, "1 / 8", fontsize=6.5, color="#64748b", ha="right")
+    ax.text(0.94, 0.044, "1 / 9", fontsize=6.5, color="#64748b", ha="right")
 
     out_pdf = "page_01_26nov.pdf"
     fig.savefig(out_pdf, format="pdf", dpi=DPI, bbox_inches=None)
-    fig.savefig(os.path.join("report", "page_01_preview.png"), dpi=150, bbox_inches=None)
     plt.close(fig)
-    print(f"Generated {out_pdf} and report/page_01_preview.png")
+    print(f"Generated {out_pdf}")
+    return out_pdf
+
+
+def create_steer_model_learning_page():
+    """Render Page 2: What Are We Actually Teaching the Steer Model?"""
+    fig = plt.figure(figsize=(A4_WIDTH_IN, A4_HEIGHT_IN), dpi=DPI)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.axis("off")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    # 1. Header category
+    ax.text(0.06, 0.962, "CORE MODEL ARCHITECTURE & LEARNING OBJECTIVES",
+            fontsize=8.5, fontweight="bold", color="#007a87", family="sans-serif")
+
+    # 2. Title and subtitle
+    ax.text(0.06, 0.934, "What Are We Actually Teaching the Steering Model?",
+            fontsize=14.0, fontweight="bold", color="#0f172a", family="sans-serif")
+    ax.text(0.06, 0.914, "Imitation learning, Nvidia 3-camera recovery, multimodal kinematics, and classical vs ML decomposition",
+            fontsize=8.8, color="#475569", family="sans-serif")
+
+    # Separator line
+    ax.plot([0.06, 0.94], [0.904, 0.904], color="#cbd5e1", lw=0.9)
+
+    # 3. Overview Paragraph
+    overview_text = (
+        "Rather than hardcoding brittle geometric rules ('turn if a line appears at pixel X'), our steering models are\n"
+        "trained using Behavioral Cloning (Imitation Learning). The network observes an expert CARLA autopilot navigating\n"
+        "diverse urban roads and learns a continuous function mapping raw perception and vehicle kinematics directly to commanded\n"
+        "steering angle delta in [-1.0, +1.0]. This enables smooth lane keeping and curve following across changing lighting, shadows, and textures."
+    )
+    ax.text(0.06, 0.894, overview_text, fontsize=7.6, color="#1e293b", family="sans-serif", va="top", linespacing=1.28)
+
+    # -------------------------------------------------------------------------
+    # SECTION 1 & 2: TWO MODEL ARCHITECTURES (Y: 0.825 to 0.520)
+    # -------------------------------------------------------------------------
+    card_y = 0.525
+    card_h = 0.285
+
+    # Left Card: PilotNet Vision Model
+    c1 = patches.FancyBboxPatch((0.06, card_y), 0.425, card_h, boxstyle="round,pad=0.008,rounding_size=0.012",
+                                fc="#f0f9ff", ec="#0284c7", lw=1.0)
+    ax.add_patch(c1)
+    pill1 = patches.FancyBboxPatch((0.068, card_y + card_h - 0.026), 0.409, 0.020,
+                                   boxstyle="round,pad=0.004,rounding_size=0.006", fc="#e0f2fe", ec="none")
+    ax.add_patch(pill1)
+    ax.text(0.076, card_y + card_h - 0.016, "Model A: Vision PilotNet (Image -> Steer)",
+            fontsize=7.2, fontweight="bold", color="#0369a1", va="center")
+
+    c1_content = (
+        "• Network Input: Single 200x66 RGB image cropped from rows\n"
+        "  110-216 of forward camera (discards sky and ego hood;\n"
+        "  isolates road surface, lane markings, curbs, and bends).\n"
+        "• Target Prediction: Continuous steering angle delta in [-1, +1]\n"
+        "  trained via SmoothL1 Loss (Adam, lr=1e-3, batch=64).\n"
+        "• Nvidia 3-Camera Self-Recovery: Center camera trained with\n"
+        "  offset=0.0; Left camera trained with delta + 0.05 (steer right);\n"
+        "  Right camera trained with delta - 0.05 (steer left). Teaches\n"
+        "  the car to instinctively counter-steer if it drifts off-center!\n"
+        "• Anti-Bias Mirror Invariance: Horizontal flipping (x -> flip(x),\n"
+        "  y -> -y) doubles data to 8,346 frames with exact 1:1 balance,\n"
+        "  eliminating the +0.0613 right-turn drift to -0.0005."
+    )
+    ax.text(0.074, card_y + card_h - 0.038, c1_content, fontsize=5.8, color="#0f172a", va="top", linespacing=1.26)
+
+    # Right Card: Tabular Kinematics & Perception Model
+    c2 = patches.FancyBboxPatch((0.515, card_y), 0.425, card_h, boxstyle="round,pad=0.008,rounding_size=0.012",
+                                fc="#fdf4ff", ec="#c026d3", lw=1.0)
+    ax.add_patch(c2)
+    pill2 = patches.FancyBboxPatch((0.523, card_y + card_h - 0.026), 0.409, 0.020,
+                                   boxstyle="round,pad=0.004,rounding_size=0.006", fc="#fae8ff", ec="none")
+    ax.add_patch(pill2)
+    ax.text(0.531, card_y + card_h - 0.016, "Model B: Kinematics & Perception (steer_model.pth)",
+            fontsize=7.2, fontweight="bold", color="#a21caf", va="center")
+
+    c2_content = (
+        "• 14 Input Features: Speed (km/h), forward speed (m/s),\n"
+        "  relative lane yaw error (deg), yaw rate (rad/s), longitudinal\n"
+        "  and lateral acceleration (m/s2), road curvature kappa (1/m),\n"
+        "  plus YOLO object counts (cars, trucks, persons, lights).\n"
+        "• MLP Architecture: 14 -> 64 -> 32 -> 16 -> 3 outputs\n"
+        "  (steering, throttle, brake) with target scale normalization.\n"
+        "• Dynamics-Aware Smoothing: Teaches the controller to modulate\n"
+        "  steering sensitivity based on speed: sharp low-speed maneuvering\n"
+        "  vs heavily damped high-speed stability to prevent spinouts.\n"
+        "• Speed-Curvature Coordination: Predicts natural braking\n"
+        "  entering sharp bends and smooth throttle exit on straights."
+    )
+    ax.text(0.529, card_y + card_h - 0.038, c2_content, fontsize=5.8, color="#0f172a", va="top", linespacing=1.26)
+
+    # -------------------------------------------------------------------------
+    # SECTION 3: FUNCTIONAL DECOMPOSITION TABLE (Y: 0.505 to 0.205)
+    # -------------------------------------------------------------------------
+    t_y = 0.205
+    t_h = 0.295
+    decomp_card = patches.FancyBboxPatch((0.06, t_y), 0.880, t_h, boxstyle="round,pad=0.008,rounding_size=0.012",
+                                         fc="#f8fafc", ec="#64748b", lw=0.9)
+    ax.add_patch(decomp_card)
+
+    dpill = patches.FancyBboxPatch((0.068, t_y + t_h - 0.026), 0.864, 0.020,
+                                   boxstyle="round,pad=0.004,rounding_size=0.008", fc="#e2e8f0", ec="none")
+    ax.add_patch(dpill)
+    ax.text(0.080, t_y + t_h - 0.016, "Functional Allocation: Machine Learning vs Deterministic Classical Algorithms",
+            fontsize=7.5, fontweight="bold", color="#0f172a", va="center")
+
+    table_lines = (
+        "Autonomous Task / Responsibility  Executing Subsystem            Allocation Rationale (Why ML vs Deterministic?)\n"
+        "------------------------------------------------------------------------------------------------------------------------------------\n"
+        "Lane Keeping & Road Centering     PilotNet / Tabular Model       Machine Learning: Generalizes across visual lane variations, shadows,\n"
+        "                                                                 curb styles, asphalt colors, and smooth road curvature transitions.\n"
+        "Global Path Planning (Point A->B) RoadRouter (A* / Dijkstra)     Deterministic: Neural nets cannot reliably memorize entire road networks.\n"
+        "                                                                 Graph search on OpenDRIVE guarantees legal, valid shortest paths.\n"
+        "Collision Avoidance (AEB)         Safety Layer (d < 5.0m)        Deterministic: Statistical models have failure margins; safety requires\n"
+        "                                                                 zero-tolerance, failsafe 1.0 brake stops when obstacles enter front zone.\n"
+        "Destination Arrival & Halt        RouteFollower (Pure Pursuit)   Deterministic: Smooth linear speed ramp down (20m -> 0m) and locked brake\n"
+        "                                                                 guarantees car halts exactly inside the 2.5m arrival tolerance."
+    )
+    ax.text(0.076, t_y + t_h - 0.038, table_lines, fontsize=5.3, family="monospace", color="#0f172a", va="top", linespacing=1.28)
+
+    # -------------------------------------------------------------------------
+    # SECTION 4: THREE CORE ARCHITECTURAL PRINCIPLES (Y: 0.180 to 0.070)
+    # -------------------------------------------------------------------------
+    b_y = 0.075
+    b_h = 0.105
+
+    # Box 1: Imitation
+    r1 = patches.FancyBboxPatch((0.060, b_y), 0.275, b_h, boxstyle="round,pad=0.008", fc="#eff6ff", ec="#3b82f6", lw=1.0)
+    ax.add_patch(r1)
+    ax.text(0.070, b_y + b_h - 0.016, "1. Imitation Learning", fontsize=7.2, fontweight="bold", color="#1d4ed8")
+    b1_text = (
+        "• Learns human-like trajectory\n"
+        "  continuity directly from expert driving.\n"
+        "• No brittle edge-detection or line\n"
+        "  fitting pipelines required.\n"
+        "• Robust to missing lane paint & rain."
+    )
+    ax.text(0.070, b_y + b_h - 0.032, b1_text, fontsize=5.8, color="#1e3a8a", va="top", linespacing=1.22)
+
+    # Box 2: 3-Camera Recovery
+    r2 = patches.FancyBboxPatch((0.362, b_y), 0.275, b_h, boxstyle="round,pad=0.008", fc="#f0fdf4", ec="#22c55e", lw=1.0)
+    ax.add_patch(r2)
+    ax.text(0.372, b_y + b_h - 0.016, "2. Active Drift Recovery", fontsize=7.2, fontweight="bold", color="#15803d")
+    b2_text = (
+        "• Left/Right cameras act as simulated\n"
+        "  lateral drift perturbations.\n"
+        "• Offsets (+/-0.05) teach recovery\n"
+        "  vector back to lane centerline.\n"
+        "• Prevents accumulated tracking error."
+    )
+    ax.text(0.372, b_y + b_h - 0.032, b2_text, fontsize=5.8, color="#14532d", va="top", linespacing=1.22)
+
+    # Box 3: Safety Arbitration
+    r3 = patches.FancyBboxPatch((0.665, b_y), 0.275, b_h, boxstyle="round,pad=0.008", fc="#fffbeb", ec="#f59e0b", lw=1.0)
+    ax.add_patch(r3)
+    ax.text(0.675, b_y + b_h - 0.016, "3. Separation of Concerns", fontsize=7.2, fontweight="bold", color="#b45309")
+    b3_text = (
+        "• ML model controls lane tracking;\n"
+        "  classical router sets the destination.\n"
+        "• Deterministic AEB overrides throttle\n"
+        "  if any front hazard is <= 5.0m.\n"
+        "• 100% safety guarantee against crashes."
+    )
+    ax.text(0.675, b_y + b_h - 0.032, b3_text, fontsize=5.8, color="#78350f", va="top", linespacing=1.22)
+
+    # Footer
+    ax.plot([0.06, 0.94], [0.060, 0.060], color="#cbd5e1", lw=0.6)
+    footer_text = "Architecture: pilotnet.py; train_steer.py; kritty_motion_controller.py; navigation/router.py; navigation/route_follower.py."
+    ax.text(0.06, 0.044, footer_text, fontsize=6.2, color="#64748b")
+    ax.text(0.94, 0.044, "2 / 9", fontsize=6.5, color="#64748b", ha="right")
+
+    out_pdf = "page_02_learning.pdf"
+    fig.savefig(out_pdf, format="pdf", dpi=DPI, bbox_inches=None)
+    fig.savefig(os.path.join("report", "page_02_learning_preview.png"), dpi=150, bbox_inches=None)
+    plt.close(fig)
+    print(f"Generated {out_pdf} and report/page_02_learning_preview.png")
     return out_pdf
 
 
@@ -272,20 +445,20 @@ def create_21nov_update_page():
     ax.plot([0.06, 0.94], [0.062, 0.062], color="#cbd5e1", lw=0.6)
     footer_text = "Code: train_steer.py; live_demo.py; our_model_demo.py; navigation/fixed_route.py. Telemetry: results/live_runs.jsonl."
     ax.text(0.06, 0.046, footer_text, fontsize=6.5, color="#64748b")
-    ax.text(0.94, 0.046, "2 / 8", fontsize=6.5, color="#64748b", ha="right")
+    ax.text(0.94, 0.046, "3 / 9", fontsize=6.5, color="#64748b", ha="right")
 
-    out_pdf = "page_02_21nov.pdf"
+    out_pdf = "page_03_21nov.pdf"
     fig.savefig(out_pdf, format="pdf", dpi=DPI, bbox_inches=None)
-    fig.savefig(os.path.join("report", "page_02_preview.png"), dpi=150, bbox_inches=None)
     plt.close(fig)
-    print(f"Generated {out_pdf} and report/page_02_preview.png")
+    print(f"Generated {out_pdf}")
     return out_pdf
 
 
 def build_progress_report():
-    """Assemble all 8 pages of the comprehensive progress report."""
+    """Assemble all 9 pages of the comprehensive progress report."""
     page1_pdf = create_26nov_milestone_page()
-    page2_pdf = create_21nov_update_page()
+    page2_pdf = create_steer_model_learning_page()
+    page3_pdf = create_21nov_update_page()
 
     writer = pypdf.PdfWriter()
 
@@ -293,18 +466,24 @@ def build_progress_report():
     r1 = pypdf.PdfReader(page1_pdf)
     writer.add_page(r1.pages[0])
 
-    # 2. Page 2: 21 Nov 2026 Milestone Update
+    # 2. Page 2: What Are We Actually Teaching the Steer Model?
     r2 = pypdf.PdfReader(page2_pdf)
     writer.add_page(r2.pages[0])
 
-    # 3. Pages 3-8: 19 Nov update + Original 5 report pages from progress.pdf
-    # Read existing progress.pdf to extract 19 Nov update and original pages
+    # 3. Page 3: 21 Nov 2026 Milestone Update
+    r3 = pypdf.PdfReader(page3_pdf)
+    writer.add_page(r3.pages[0])
+
+    # 4. Pages 4-9: 19 Nov update + Original 5 report pages from progress.pdf
     cur_reader = pypdf.PdfReader("progress.pdf")
-    # In current 7-page progress.pdf:
-    # Page 0 was 21 Nov
-    # Page 1 was 19 Nov
-    # Pages 2-6 were original 5 pages (Figures 1-13)
-    start_from = 1 if len(cur_reader.pages) == 7 else 2
+    # Identify where the 19 Nov update starts:
+    start_from = 0
+    for idx, page in enumerate(cur_reader.pages):
+        txt = page.extract_text()
+        if "19 NOVEMBER 2026" in txt or "Fixed-route navigation" in txt:
+            start_from = idx
+            break
+
     for i in range(start_from, len(cur_reader.pages)):
         writer.add_page(cur_reader.pages[i])
 
@@ -320,7 +499,7 @@ def build_progress_report():
     os.rename(out_file, "progress.pdf")
 
     # Clean temporary pdf files
-    for temp in [page1_pdf, page2_pdf]:
+    for temp in [page1_pdf, page2_pdf, page3_pdf]:
         if os.path.isfile(temp):
             os.remove(temp)
 
