@@ -114,6 +114,33 @@ class TestRouterAndFollower(unittest.TestCase):
         self.assertEqual(brake, 1.0)
         self.assertFalse(replan)
 
+    def test_destination_arrival_braking_and_full_stop(self):
+        follower = RouteFollower(target_speed_kmh=25.0, arrival_radius_m=2.5)
+        follower.set_route(self.straight_plan)
+
+        # 1. Inside arrival radius (distance = 1.0m <= 2.5m) but carrying speed (8 km/h) -> must command full brake
+        steer, throttle, brake, replan = follower.step(
+            current_x=99.0, current_y=0.0, current_yaw_deg=0.0, speed_kmh=8.0
+        )
+        self.assertEqual(throttle, 0.0)
+        self.assertEqual(brake, 1.0)
+
+        # 2. Vehicle halts (speed drops below 3.0 km/h) -> transitions to ARRIVED
+        steer, throttle, brake, replan = follower.step(
+            current_x=99.2, current_y=0.0, current_yaw_deg=0.0, speed_kmh=0.5
+        )
+        self.assertEqual(follower.state, NavigationState.ARRIVED)
+        self.assertEqual(throttle, 0.0)
+        self.assertEqual(brake, 1.0)
+
+        # 3. Permanently holds full stop at destination
+        steer, throttle, brake, replan = follower.step(
+            current_x=99.2, current_y=0.0, current_yaw_deg=0.0, speed_kmh=0.0
+        )
+        self.assertEqual(follower.state, NavigationState.ARRIVED)
+        self.assertEqual(throttle, 0.0)
+        self.assertEqual(brake, 1.0)
+
     def test_lateral_steering_correction(self):
         follower = RouteFollower(target_speed_kmh=30.0)
         follower.set_route(self.straight_plan)

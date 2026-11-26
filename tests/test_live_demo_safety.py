@@ -39,6 +39,31 @@ class TestLiveDemoSafety(unittest.TestCase):
 
         self.assertAlmostEqual(distance, 4.5)
 
+    def test_safety_zone_ignores_rear_and_back_actors_but_protects_front_and_front_sides(self):
+        ego = FakeActor(1, 0.0)  # extent = (2.0, 1.0, 1.0)
+        
+        # 1. Back/rear actor directly behind vehicle (x = -6.0)
+        rear_actor = FakeActor(2, -6.0)
+        self.assertIsNone(nearest_obstacle_distance(ego, [ego, rear_actor]))
+        
+        # 2. Rear-side actor beside rear wheels (x = -1.5, y = 2.0)
+        rear_side_actor = FakeActor(3, -1.5, y=2.0)
+        self.assertIsNone(nearest_obstacle_distance(ego, [ego, rear_side_actor]))
+        
+        # 3. Front-side actor beside front fender (x = 1.0, y = 2.5, extent = (1.0, 1.0, 1.0))
+        # lateral_gap = 2.5 - 1.0 (ego) - 1.0 (actor) = 0.5m
+        front_side_actor = FakeActor(4, 1.0, y=2.5, extent=(1.0, 1.0, 1.0))
+        d_front_side = nearest_obstacle_distance(ego, [ego, front_side_actor])
+        self.assertIsNotNone(d_front_side)
+        self.assertAlmostEqual(d_front_side, 0.5)
+
+        # 4. Front actor ahead of front bumper (x = 7.0, extent = (2.0, 1.0, 1.0))
+        # forward_gap = 7.0 - 2.0 (ego) - 2.0 (actor) = 3.0m
+        front_actor = FakeActor(5, 7.0)
+        d_front = nearest_obstacle_distance(ego, [ego, front_actor])
+        self.assertIsNotNone(d_front)
+        self.assertAlmostEqual(d_front, 3.0)
+
     def test_emergency_brake_activates_at_five_metres_and_releases_with_hysteresis(self):
         self.assertTrue(should_apply_emergency_brake(False, 5.0))
         self.assertFalse(should_apply_emergency_brake(False, 5.01))

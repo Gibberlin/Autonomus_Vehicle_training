@@ -119,6 +119,9 @@ class RouteFollower:
                 self.state = NavigationState.ARRIVED
                 print(f"[navigation] ARRIVED at destination ({self.destination[0]:.1f}, {self.destination[1]:.1f})")
                 return 0.0, 0.0, 1.0, False
+            else:
+                # Inside arrival zone: apply full stop brake to halt at destination
+                return 0.0, 0.0, 1.0, False
 
         # 2. Advance progress along the route
         search_window = min(len(self.polyline_2d), self.current_index + 25)
@@ -193,14 +196,19 @@ class RouteFollower:
         # 6. Longitudinal Speed Control
         # Speed profiling: slow down before sharp turns and near destination
         speed_target = self.cruise_speed_kmh
-        if abs(steer_command) > 0.15:
-            speed_target = max(10.0, self.cruise_speed_kmh * 0.55)
-        elif abs(steer_command) > 0.30:
+        if abs(steer_command) > 0.30:
             speed_target = max(8.0, self.cruise_speed_kmh * 0.40)
+        elif abs(steer_command) > 0.15:
+            speed_target = max(10.0, self.cruise_speed_kmh * 0.55)
 
-        # Ramp down near destination
-        if dist_to_destination < 12.0:
-            speed_target = min(speed_target, max(4.0, (dist_to_destination / 12.0) * self.cruise_speed_kmh))
+        # Smooth deceleration ramp approaching destination
+        if dist_to_destination < 20.0:
+            ramp = max(
+                0.0,
+                (dist_to_destination - self.arrival_radius_m)
+                / (20.0 - self.arrival_radius_m),
+            )
+            speed_target = min(speed_target, max(4.0 * ramp, 25.0 * ramp))
 
         speed_error = speed_target - speed_kmh
         if speed_error > 0.0:

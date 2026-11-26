@@ -132,7 +132,12 @@ def parse_args():
         default=False,
         help="use the fixed Town03 route (maximum 3000 m) with navigation-assisted model steering (default: disabled)",
     )
-    parser.add_argument("--minimap", action="store_true", help="enable Town03 road minimap overlay")
+    parser.add_argument(
+        "--minimap",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable road minimap overlay and route planning (default: enabled)",
+    )
     parser.add_argument("--minimap-position", choices=("top-right", "top-left"), default="top-right",
                         help="minimap overlay position on display (default: top-right)")
     parser.add_argument("--minimap-size", type=int, default=260,
@@ -202,9 +207,21 @@ def nearest_obstacle_distance(ego, actors):
         actor_lateral_extent = (
             sin_relative * actor_box.extent.x + cos_relative * actor_box.extent.y
         )
-        forward_gap = max(
-            0.0, abs(forward) - ego_box.extent.x - actor_forward_extent
-        )
+        # Safety spot is only for the front and front-sides; back/rear are not needed for failsafe
+        actor_front_x = forward + actor_forward_extent
+        if actor_front_x <= 0.0:
+            # Entire obstacle is behind the vehicle center (rear / back)
+            continue
+        if forward < 0.0 and actor_front_x < ego_box.extent.x:
+            # Obstacle is centered in the rear and does not reach the front bumper (rear-side)
+            continue
+
+        if forward >= ego_box.extent.x + actor_forward_extent:
+            forward_gap = forward - ego_box.extent.x - actor_forward_extent
+        else:
+            # Front-side overlap (alongside front bumper or front portion of ego)
+            forward_gap = 0.0
+
         lateral_gap = max(
             0.0, abs(lateral) - ego_box.extent.y - actor_lateral_extent
         )
@@ -536,13 +553,48 @@ def main():
             )
 
         print("[ready] CARLA live demo")
-        print("[keys] m: model driving | a: autopilot | q / Esc: quit")
+        print("[keys] m: follow route / model control | a: CARLA autopilot | d: pick new destination | q / Esc: quit")
 
-        # Navigation is turned off (limited to Town03; deferred until general multi-map navigation is ready)
         router = None
         route_follower = None
         NavigationState = None
         route_active = False
+
+        try:
+            from navigation.router import RoadRouter
+            from navigation.route_follower import RouteFollower, NavigationState
+
+            router = RoadRouter(world.get_map(), resolution_m=2.0)
+            route_follower = RouteFollower(target_speed_kmh=args.target_speed, arrival_radius_m=2.5)
+
+            # Determine destination: CLI argument or minimap destination
+            dest_coords = None
+            if args.destination:
+                dest_coords = (float(args.destination[0]), float(args.destination[1]))
+                if minimap is not None:
+                    minimap.set_destination(*dest_coords)
+            elif minimap is not None:
+                dest_coords = minimap.destination_location
+
+            if dest_coords is not None:
+                plan = router.plan_route(
+                    (ego_spawn.location.x, ego_spawn.location.y),
+                    dest_coords,
+                    origin_heading=ego_spawn.rotation.yaw,
+                )
+                if plan.success:
+                    route_follower.set_route(plan)
+                    if minimap is not None:
+                        minimap.set_route(plan.polyline_2d, plan.total_distance_m)
+                    route_active = True
+                    print(
+                        f"[route] Planned valid road route: {len(plan.polyline_2d)} waypoints, "
+                        f"{plan.total_distance_m:.1f} m to destination ({dest_coords[0]:.1f}, {dest_coords[1]:.1f})"
+                    )
+                else:
+                    print(f"[route] Warning: Could not plan initial route: {plan.error_message}")
+        except Exception as exc:
+            print(f"[route] Route navigation initialization failed: {exc}")
 
         while True:
             world_frame = world.tick()
@@ -705,6 +757,8 @@ def main():
                     steer_command = route_steer
                     throttle = route_throttle
                     brake = route_brake
+                    if route_follower is not None and NavigationState is not None and route_follower.state == NavigationState.ARRIVED:
+                        throttle, brake, steer_command = 0.0, 1.0, 0.0
                 else:
                     if fusion_control is not None:
                         throttle = fusion_control["throttle"]
@@ -901,14 +955,14 @@ def main():
             elif key == ord("m"):
                 if state["auto"]:
                     ego.set_autopilot(False)
-                if not failsafe_active:
-                    ego.apply_control(carla.VehicleControl(
-                        throttle=0.0, steer=0.0, brake=0.0
-                    ))
                 state["auto"] = False
-                route_active = False
+                if route_follower is not None and route_follower.route_plan is not None:
+                    route_active = True
+                    print("[mode] Route follower active towards destination")
+                else:
+                    route_active = False
+                    print("[mode] Model driving active")
                 steer_previous = 0.0
-                print("[mode] KITTI controller now has control")
             elif key == ord("a") and not state["auto"]:
                 state["auto"] = True
                 route_active = False

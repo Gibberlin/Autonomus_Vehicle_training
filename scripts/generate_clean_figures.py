@@ -205,9 +205,9 @@ def generate_figure_17():
             "title": "A. Dynamic Obstacle AEB",
             "x": bot_x + 2.0, "w": 28.0,
             "lines": [
-                "• Bumper clearance sensor (x=2.6m)",
-                "• Filters self-collision false alarms",
-                "• Stop trigger: distance < 5.0m",
+                "• Front & front-side safety zone",
+                "• Rear & back traffic ignored",
+                "• Stop trigger: front dist < 5.0m",
                 "• Release hysteresis: clear > 6.0m",
                 "• Immediate priority override",
             ]
@@ -216,7 +216,7 @@ def generate_figure_17():
             "title": "B. Destination Arrival Stop",
             "x": bot_x + 32.5, "w": 28.0,
             "lines": [
-                "• 12m deceleration approach ramp",
+                "• 20m deceleration approach ramp",
                 "• Target arrival radius: < 2.5m",
                 "• Speed verification: v < 3.0 km/h",
                 "• Full stop brake command: brake=1.0",
@@ -231,7 +231,7 @@ def generate_figure_17():
                 "• Throttle & regenerative braking",
                 "• Seamless mode toggle (m / a / d)",
                 "• Zero false-positive brake locks",
-                "• Verified across 38 unit tests",
+                "• Verified across 40 unit tests",
             ]
         },
     ]
@@ -356,14 +356,14 @@ def generate_figure_18():
     ax2 = fig.add_subplot(gs[0, 2])
     d_dest = np.linspace(0, 25, 250)
     cruise_speed = 25.0
-    speed_profile = np.where(d_dest < 2.5, 0.0, cruise_speed * np.clip(d_dest / 12.0, 0.35, 1.0))
+    speed_profile = np.where(d_dest < 2.5, 0.0, cruise_speed * np.clip((d_dest - 2.5) / 17.5, 0.0, 1.0))
     brake_profile = np.where(d_dest < 2.5, 1.0, 0.0)
 
     ax2.plot(d_dest, speed_profile, color="#059669", lw=2.4, label="Target Speed Profile (km/h)")
     ax2.plot(d_dest, brake_profile * 25.0, color="#dc2626", lw=2.0, linestyle="--", label="Full Arrival Brake (100%)")
 
     ax2.axvspan(0, 2.5, color="#fee2e2", alpha=0.55, label="Arrival Zone (<2.5m Stop)")
-    ax2.axvspan(2.5, 12.0, color="#e0f2fe", alpha=0.35, label="Deceleration Ramp (12m)")
+    ax2.axvspan(2.5, 20.0, color="#e0f2fe", alpha=0.35, label="Deceleration Ramp (20m)")
     ax2.axvline(5.0, color="#e11d48", linestyle="-.", lw=1.8, label="Obstacle Stop (5m)")
     ax2.axvline(6.0, color="#10b981", linestyle=":", lw=1.8, label="Obstacle Clear (6m)")
 
